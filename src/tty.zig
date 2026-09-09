@@ -4,7 +4,6 @@ const posix = std.posix;
 
 const enter_seq = "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[H\x1b[2J";
 const leave_seq = "\x1b[?25h\x1b[?7h\x1b[?1049l";
-const ctrl_c = 0x03;
 
 pub const Screen = struct {
     io: Io,
@@ -49,13 +48,16 @@ pub const Screen = struct {
         try self.writeAll(std.mem.trimEnd(u8, text, "\n"));
     }
 
-    pub fn waitQuit(self: *Screen) !void {
+    pub fn readByte(self: *Screen) !u8 {
         var buf: [64]u8 = undefined;
         var reader = Io.File.Reader.initStreaming(self.stdin, self.io, &buf);
-        while (true) {
-            const b = try reader.interface.takeByte();
-            if (b == ctrl_c) return;
-        }
+        return reader.interface.takeByte();
+    }
+
+    pub fn stamp(self: *Screen, row: u32, col: u32, ch: u8) !void {
+        var seq: [32]u8 = undefined;
+        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H\x1b[7m{c}\x1b[27m", .{ row + 1, col + 1, ch }) catch unreachable;
+        try self.writeAll(n);
     }
 
     fn writeAll(self: *Screen, bytes: []const u8) !void {

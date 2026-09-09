@@ -40,11 +40,25 @@ pub const Match = struct {
     label: ?u8 = null,
 };
 
+pub const Cell = struct {
+    col: u32,
+    width: u8,
+    bytes: []const u8,
+};
+
+pub const tabstop: u32 = 8;
+
 pub const Grid = struct {
     lines: []const []const u8,
     width: u32,
     cursor: Pos = .{},
 };
+
+pub fn labelCol(m: Match, pane_width: u32) u32 {
+    const after = m.end_pos.col + 1;
+    if (pane_width != 0 and after >= pane_width) return m.end_pos.col;
+    return after;
+}
 
 pub const Opts = struct {
     labels: []const u8 = "asdfghjklqwertyuiopzxcvbnm",
@@ -67,6 +81,7 @@ pub const State = struct {
     allocator: std.mem.Allocator,
     opts: Opts,
     grid: Grid,
+    rows: [][]Cell = &.{},
     pattern: std.ArrayList(u8) = .empty,
     results: std.ArrayList(Match) = .empty,
     labeler: Labeler,
@@ -83,11 +98,14 @@ pub const State = struct {
             .grid = grid,
             .labeler = Labeler.init(allocator),
         };
+        self.rows = try parseGrid(allocator, grid.lines);
         _ = try self.update(self.pattern.items, false);
         return self;
     }
 
     pub fn deinit(self: *State) void {
+        for (self.rows) |row| self.allocator.free(row);
+        self.allocator.free(self.rows);
         self.pattern.deinit(self.allocator);
         self.results.deinit(self.allocator);
         self.labeler.deinit();
@@ -188,7 +206,7 @@ pub const State = struct {
     }
 
     fn updateInner(self: *State) !void {
-        try collectMatches(self.allocator, self.grid, self.search(), &self.results);
+        try collectMatches(self.allocator, self.rows, self.search(), &self.results);
         self.target = findMatch(self.results.items, self.grid.cursor, self.opts.forward, self.opts.wrap, 1);
         if (self.pattern.items.len >= self.opts.min_pattern_length) {
             try self.labeler.update(self);
@@ -270,7 +288,7 @@ const Labeler = struct {
         }
 
         while (self.labels.items.len > 0) {
-            const ch = nextCharAfterNeedle(state.grid, needle, self.labels.items) orelse return;
+            const ch = nextCharAfterNeedle(state.rows, needle, self.labels.items) orelse return;
             const before = self.labels.items.len;
             self.use(ch);
             if (self.labels.items.len == before) {
@@ -383,36 +401,106 @@ fn extendAlloc(allocator: std.mem.Allocator, pattern: []const u8, ch: u8) ![]u8 
     return out;
 }
 
+fn parseGrid(allocator: std.mem.Allocator, lines: []const []const u8) ![][]Cell {
+    const rows = try allocator.alloc([]Cell, lines.len);
+    var n: usize = 0;
+    errdefer {
+        for (rows[0..n]) |row| allocator.free(row);
+        allocator.free(rows);
+    }
+    for (lines, 0..) |line, i| {
+        rows[i] = try parseLine(allocator, line);
+        n += 1;
+    }
+    return rows;
+}
+
+pub fn parseLine(allocator: std.mem.Allocator, line: []const u8) ![]Cell {
+    var list: std.ArrayList(Cell) = .empty;
+    errdefer list.deinit(allocator);
+    var col: u32 = 0;
+    var i: usize = 0;
+    while (i < line.len) {
+        if (line[i] == 0x09) {
+            const rem = col % tabstop;
+            col += if (rem == 0) tabstop else tabstop - rem;
+            i += 1;
+            continue;
+        }
+        const n = std.unicode.utf8ByteSequenceLength(line[i]) catch {
+            try list.append(allocator, .{ .col = col, .width = 1, .bytes = line[i .. i + 1] });
+            col += 1;
+            i += 1;
+            continue;
+        };
+        if (i + n > line.len) {
+            try list.append(allocator, .{ .col = col, .width = 1, .bytes = line[i .. i + 1] });
+            col += 1;
+            i += 1;
+            continue;
+        }
+        const bytes = line[i .. i + n];
+        const cp = std.unicode.utf8Decode(bytes) catch {
+            try list.append(allocator, .{ .col = col, .width = 1, .bytes = line[i .. i + 1] });
+            col += 1;
+            i += 1;
+            continue;
+        };
+        i += n;
+        const w = codeWidth(cp);
+        if (w == 0) continue;
+        try list.append(allocator, .{ .col = col, .width = @intCast(w), .bytes = bytes });
+        col += w;
+    }
+    return list.toOwnedSlice(allocator);
+}
+
+fn matchFrom(cells: []const Cell, needle: []const u8) ?usize {
+    var got: usize = 0;
+    for (cells, 0..) |cell, j| {
+        const b = cell.bytes;
+        if (b.len == 0) continue;
+        if (got + b.len > needle.len) return null;
+        if (!std.mem.eql(u8, b, needle[got .. got + b.len])) return null;
+        got += b.len;
+        if (got == needle.len) return j;
+    }
+    return null;
+}
+
 fn collectMatches(
     allocator: std.mem.Allocator,
-    grid: Grid,
+    rows: []const []Cell,
     needle: []const u8,
     out: *std.ArrayList(Match),
 ) !void {
     out.clearRetainingCapacity();
     if (needle.len == 0) return;
-    for (grid.lines, 0..) |line, row| {
-        var col: usize = 0;
-        while (col + needle.len <= line.len) : (col += 1) {
-            if (std.mem.eql(u8, line[col..][0..needle.len], needle)) {
-                const c: u32 = @intCast(col);
-                const end_col: u32 = c + @as(u32, @intCast(needle.len)) - 1;
-                try out.append(allocator, .{
-                    .pos = .{ .row = @intCast(row), .col = c },
-                    .end_pos = .{ .row = @intCast(row), .col = end_col },
-                });
-            }
+    for (rows, 0..) |cells, row| {
+        var i: usize = 0;
+        while (i < cells.len) : (i += 1) {
+            const last_off = matchFrom(cells[i..], needle) orelse continue;
+            const last = cells[i + last_off];
+            const start = cells[i];
+            const end_col = last.col + last.width - 1;
+            try out.append(allocator, .{
+                .pos = .{ .row = @intCast(row), .col = start.col },
+                .end_pos = .{ .row = @intCast(row), .col = end_col },
+            });
         }
     }
 }
 
-fn nextCharAfterNeedle(grid: Grid, needle: []const u8, labels: []const u8) ?u8 {
-    for (grid.lines) |line| {
-        var col: usize = 0;
-        while (col + needle.len < line.len) : (col += 1) {
-            if (!std.mem.eql(u8, line[col..][0..needle.len], needle)) continue;
-            const ch = line[col + needle.len];
-            if (std.mem.indexOfScalar(u8, labels, ch) != null) return ch;
+fn nextCharAfterNeedle(rows: []const []Cell, needle: []const u8, labels: []const u8) ?u8 {
+    for (rows) |cells| {
+        var i: usize = 0;
+        while (i < cells.len) : (i += 1) {
+            const last_off = matchFrom(cells[i..], needle) orelse continue;
+            const next_i = i + last_off + 1;
+            if (next_i >= cells.len) continue;
+            const b = cells[next_i].bytes;
+            if (b.len != 1) continue;
+            if (std.mem.indexOfScalar(u8, labels, b[0]) != null) return b[0];
         }
     }
     return null;
@@ -468,6 +556,59 @@ fn findMatch(matches: []const Match, pos: Pos, forward: bool, wrap: bool, count:
     return matches[@intCast(i)];
 }
 
+/// Display column of the codepoint that starts at `byte_col`.
+pub fn displayCol(line: []const u8, byte_col: u32) u32 {
+    var i: usize = 0;
+    var col: u32 = 0;
+    while (i < line.len and i < byte_col) {
+        const n = std.unicode.utf8ByteSequenceLength(line[i]) catch {
+            i += 1;
+            col += 1;
+            continue;
+        };
+        if (i + n > line.len or i + n > byte_col) break;
+        const cp = std.unicode.utf8Decode(line[i..][0..n]) catch {
+            i += 1;
+            col += 1;
+            continue;
+        };
+        i += n;
+        col += codeWidth(cp);
+    }
+    return col;
+}
+
+fn codeWidth(cp: u21) u32 {
+    if (cp == 0 or cp < 0x20 or cp == 0x7f) return 0;
+    if (isCombining(cp)) return 0;
+    if (isWide(cp)) return 2;
+    return 1;
+}
+
+fn isCombining(cp: u21) bool {
+    return (cp >= 0x0300 and cp <= 0x036F) or
+        (cp >= 0x1AB0 and cp <= 0x1AFF) or
+        (cp >= 0x1DC0 and cp <= 0x1DFF) or
+        (cp >= 0x20D0 and cp <= 0x20FF) or
+        (cp >= 0xFE20 and cp <= 0xFE2F) or
+        cp == 0x200B or cp == 0xFEFF;
+}
+
+fn isWide(cp: u21) bool {
+    return (cp >= 0x1100 and cp <= 0x115F) or
+        (cp >= 0x2329 and cp <= 0x232A) or
+        (cp >= 0x2E80 and cp <= 0xA4CF and cp != 0x303F) or
+        (cp >= 0xAC00 and cp <= 0xD7A3) or
+        (cp >= 0xF900 and cp <= 0xFAFF) or
+        (cp >= 0xFE10 and cp <= 0xFE19) or
+        (cp >= 0xFE30 and cp <= 0xFE6F) or
+        (cp >= 0xFF00 and cp <= 0xFF60) or
+        (cp >= 0xFFE0 and cp <= 0xFFE6) or
+        (cp >= 0x1F300 and cp <= 0x1F64F) or
+        (cp >= 0x1F900 and cp <= 0x1F9FF) or
+        (cp >= 0x20000 and cp <= 0x3FFFD);
+}
+
 fn initLine(allocator: std.mem.Allocator, lines: []const []const u8, opts: Opts) !State {
     return State.init(allocator, .{ .lines = lines, .width = 80, .cursor = .{} }, opts);
 }
@@ -514,6 +655,27 @@ test "autojump single match" {
 
     try std.testing.expect(!try state.step('h'));
     try std.testing.expectEqual(Pos{ .row = 0, .col = 0 }, state.jumped.?.pos);
+}
+
+test "tab expands to tabstop; label sits after match" {
+    const gpa = std.testing.allocator;
+    const lines = [_][]const u8{"\tmodified:"};
+    var state = try initLine(gpa, &lines, .{});
+    defer state.deinit();
+
+    try std.testing.expect(try state.step('m'));
+    try std.testing.expectEqual(@as(usize, 1), state.results.items.len);
+    try std.testing.expectEqual(@as(u32, 8), state.results.items[0].pos.col);
+    try std.testing.expectEqual(@as(u32, 9), labelCol(state.results.items[0], 80));
+}
+
+test "displayCol utf8 vs bytes" {
+    try std.testing.expectEqual(@as(u32, 0), displayCol("abc", 0));
+    try std.testing.expectEqual(@as(u32, 2), displayCol("abc", 2));
+    const lambda_zig = "\u{03bb} zig";
+    try std.testing.expectEqual(@as(u32, 2), displayCol(lambda_zig, 3));
+    const box = "\u{2502} dir";
+    try std.testing.expectEqual(@as(u32, 2), displayCol(box, 4));
 }
 
 test "esc aborts; enter jumps target" {
