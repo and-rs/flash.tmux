@@ -1,18 +1,17 @@
-//! By convention, root.zig is the root source file when making a package.
 const std = @import("std");
 const Io = std.Io;
 
-/// This is a documentation comment to explain the `printAnotherMessage` function below.
-///
-/// Accepting an `Io.Writer` instance is a handy way to write reusable code.
-pub fn printAnotherMessage(writer: *Io.Writer) Io.Writer.Error!void {
-    try writer.print("Run `zig build test` to run the tests.\n", .{});
-}
+const pane_format = "#{session_name} #{pane_id} #{pane_width}x#{pane_height}";
 
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
-
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
+pub fn tmuxDisplay(allocator: std.mem.Allocator, io: Io) ![]u8 {
+    const result = try std.process.run(allocator, io, .{
+        .argv = &.{ "tmux", "display-message", "-p", pane_format },
+        .stdout_limit = .limited(4096),
+        .stderr_limit = .limited(4096),
+    });
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.TmuxFailed,
+        else => return error.TmuxFailed,
+    }
+    return result.stdout;
 }
