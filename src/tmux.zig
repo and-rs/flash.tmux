@@ -14,13 +14,30 @@ pub const PaneQuery = struct {
     copy_cursor_y: u32,
 };
 
-pub fn query(allocator: std.mem.Allocator, io: Io) !PaneQuery {
-    const raw = try run(allocator, io, &.{ "tmux", "display-message", "-p", query_format }, 4096);
+pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {
+    const raw = if (pane_id) |id|
+        try run(allocator, io, &.{ "tmux", "display-message", "-t", id, "-p", query_format }, 4096)
+    else
+        try run(allocator, io, &.{ "tmux", "display-message", "-p", query_format }, 4096);
     return parseQuery(raw);
 }
 
 pub fn capture(allocator: std.mem.Allocator, io: Io, pane_id: []const u8) ![]u8 {
     return run(allocator, io, &.{ "tmux", "capture-pane", "-t", pane_id, "-p", "-N" }, 1024 * 1024);
+}
+
+pub fn jump(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, row: u32, col: u32) !void {
+    _ = try run(allocator, io, &.{ "tmux", "copy-mode", "-t", pane_id }, 64);
+    _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "top-line" }, 64);
+    _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "start-of-line" }, 64);
+    if (row != 0) {
+        const n = try std.fmt.allocPrint(allocator, "{d}", .{row});
+        _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "-N", n, "cursor-down" }, 64);
+    }
+    if (col != 0) {
+        const n = try std.fmt.allocPrint(allocator, "{d}", .{col});
+        _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "-N", n, "cursor-right" }, 64);
+    }
 }
 
 pub fn parseQuery(raw: []const u8) !PaneQuery {
