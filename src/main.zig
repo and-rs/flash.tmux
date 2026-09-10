@@ -4,20 +4,33 @@ const flash_tmux = @import("flash_tmux");
 const flash = flash_tmux.flash;
 
 pub fn main(init: std.process.Init) !void {
+    run(init) catch |err| {
+        holdError(init, err);
+        return err;
+    };
+}
+
+fn run(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
     const io = init.io;
     const args = try init.minimal.args.toSlice(arena);
-    const pane_arg = try parsePane(args);
+    const opts = try parseArgs(args);
 
-    const q = try flash_tmux.tmux.query(arena, io, pane_arg);
-    const pane_id = pane_arg orelse q.pane_id;
-    const text = try flash_tmux.tmux.capture(arena, io, pane_id);
+    const q = try flash_tmux.tmux.query(arena, io, opts.pane);
+    const pane_id = q.pane_id;
+    const text = try flash_tmux.tmux.capture(arena, io, q);
+    if (opts.inspect) return printSnapshot(io, q, text);
     const lines = try splitLines(arena, text);
+
+    const cursor: flash.Pos = if (q.in_mode)
+        .{ .row = q.copy_cursor_y, .col = q.copy_cursor_x }
+    else
+        .{ .row = q.cursor_y, .col = q.cursor_x };
 
     var state = try flash.State.init(arena, .{
         .lines = lines,
         .width = q.width,
-        .cursor = .{ .row = q.cursor_y, .col = q.cursor_x },
+        .cursor = cursor,
     }, .{});
     defer state.deinit();
 
@@ -35,20 +48,63 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (state.jumped) |m| {
-        try flash_tmux.tmux.jump(arena, io, pane_id, m.pos.row, m.pos.col);
+        const now = try flash_tmux.tmux.query(arena, io, pane_id);
+        try flash_tmux.tmux.jump(arena, io, pane_id, m.pos.row, m.pos.col, q, now.in_mode);
     }
 }
 
-fn parsePane(args: []const []const u8) !?[]const u8 {
+fn holdError(init: std.process.Init, err: anyerror) void {
+    const io = init.io;
+    var out_buf: [1024]u8 = undefined;
+    var writer = std.Io.File.Writer.init(.stderr(), io, &out_buf);
+    const w = &writer.interface;
+    w.print("flash.tmux error: {s}\nargs:\n", .{@errorName(err)}) catch {};
+    const args = init.minimal.args.toSlice(init.arena.allocator()) catch &.{};
+    for (args) |a| w.print("  {s}\n", .{a}) catch {};
+    w.print("press enter\n", .{}) catch {};
+    w.flush() catch {};
+
+    var in_buf: [64]u8 = undefined;
+    var reader = std.Io.File.Reader.initStreaming(.stdin(), io, &in_buf);
+    while (reader.interface.takeByte()) |b| {
+        if (b == '\n' or b == '\r' or b == 0x03) break;
+    } else |_| {}
+}
+
+const Args = struct {
+    pane: ?[]const u8 = null,
+    inspect: bool = false,
+};
+
+fn parseArgs(args: []const []const u8) !Args {
+    var out: Args = .{};
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--pane")) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--inspect")) {
+            out.inspect = true;
+        } else if (std.mem.startsWith(u8, a, "--pane=")) {
+            const v = a["--pane=".len..];
+            if (v.len == 0) return error.MissingPane;
+            out.pane = v;
+        } else if (std.mem.eql(u8, a, "--pane")) {
             i += 1;
-            if (i >= args.len) return error.MissingPane;
-            return args[i];
+            if (i >= args.len or args[i].len == 0) return error.MissingPane;
+            out.pane = args[i];
         }
     }
-    return null;
+    return out;
+}
+
+fn printSnapshot(io: std.Io, q: flash_tmux.tmux.PaneQuery, text: []const u8) !void {
+    var out_buf: [1024]u8 = undefined;
+    var writer = std.Io.File.Writer.init(.stdout(), io, &out_buf);
+    const w = &writer.interface;
+    try w.print(
+        "pane_id={s}\nin_mode={}\ncopy_cursor={d},{d}\nscroll_position={d}\n--- capture ---\n{s}",
+        .{ q.pane_id, q.in_mode, q.copy_cursor_x, q.copy_cursor_y, q.scroll_position, text },
+    );
+    try w.flush();
 }
 
 fn paint(screen: *flash_tmux.tty.Screen, text: []const u8, state: *flash.State) !void {

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 
-const query_format = "#{pane_id}|#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{pane_in_mode}|#{copy_cursor_x}|#{copy_cursor_y}";
+const query_format = "#{pane_id}|#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{?pane_in_mode,1,0}|#{copy_cursor_x}|#{copy_cursor_y}|#{?selection_present,1,0}|#{scroll_position}";
 
 pub const PaneQuery = struct {
     pane_id: []const u8,
@@ -12,6 +12,8 @@ pub const PaneQuery = struct {
     in_mode: bool,
     copy_cursor_x: u32,
     copy_cursor_y: u32,
+    selection_present: bool,
+    scroll_position: u32,
 };
 
 pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {
@@ -22,46 +24,115 @@ pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQu
     return parseQuery(raw);
 }
 
-pub fn capture(allocator: std.mem.Allocator, io: Io, pane_id: []const u8) ![]u8 {
-    return run(allocator, io, &.{ "tmux", "capture-pane", "-t", pane_id, "-p", "-N" }, 1024 * 1024);
+pub fn capture(allocator: std.mem.Allocator, io: Io, q: PaneQuery) ![]u8 {
+    if (!q.in_mode) {
+        return run(allocator, io, &.{ "tmux", "capture-pane", "-t", q.pane_id, "-p", "-N" }, 1024 * 1024);
+    }
+
+    const start: i64 = -@as(i64, @intCast(q.scroll_position));
+    const end = start + @as(i64, @intCast(q.height)) - 1;
+    const start_arg = try std.fmt.allocPrint(allocator, "{d}", .{start});
+    const end_arg = try std.fmt.allocPrint(allocator, "{d}", .{end});
+    return run(allocator, io, &.{
+        "tmux", "capture-pane", "-t", q.pane_id, "-p", "-N",
+        "-S", start_arg, "-E", end_arg,
+    }, 1024 * 1024);
 }
 
-pub fn jump(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, row: u32, col: u32) !void {
+pub fn jump(
+    allocator: std.mem.Allocator,
+    io: Io,
+    pane_id: []const u8,
+    row: u32,
+    col: u32,
+    snap: PaneQuery,
+    still_in_mode: bool,
+) !void {
+    if (!snap.in_mode) {
+        try enterAt(allocator, io, pane_id, row, col, 0);
+        return;
+    }
+
+    if (still_in_mode) {
+        if (!snap.selection_present) {
+            try sendX(allocator, io, pane_id, &.{ "begin-selection" });
+        }
+        try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
+        return;
+    }
+
+    try enterAt(allocator, io, pane_id, snap.copy_cursor_y, snap.copy_cursor_x, snap.scroll_position);
+    try sendX(allocator, io, pane_id, &.{ "begin-selection" });
+    try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
+}
+
+fn enterAt(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
     _ = try run(allocator, io, &.{ "tmux", "copy-mode", "-t", pane_id }, 64);
-    _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "top-line" }, 64);
-    _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "start-of-line" }, 64);
-    if (row != 0) {
-        const n = try std.fmt.allocPrint(allocator, "{d}", .{row});
-        _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "-N", n, "cursor-down" }, 64);
-    }
-    if (col != 0) {
-        const n = try std.fmt.allocPrint(allocator, "{d}", .{col});
-        _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane_id, "-X", "-N", n, "cursor-right" }, 64);
-    }
+    try moveN(allocator, io, pane_id, scroll, "scroll-up");
+    try sendX(allocator, io, pane_id, &.{ "top-line" });
+    try sendX(allocator, io, pane_id, &.{ "start-of-line" });
+    try moveN(allocator, io, pane_id, row, "cursor-down");
+    try gotoCol(allocator, io, pane_id, col);
+}
+
+fn moveDelta(
+    allocator: std.mem.Allocator,
+    io: Io,
+    pane_id: []const u8,
+    from_row: u32,
+    to_row: u32,
+    to_col: u32,
+) !void {
+    if (to_row > from_row) try moveN(allocator, io, pane_id, to_row - from_row, "cursor-down");
+    if (to_row < from_row) try moveN(allocator, io, pane_id, from_row - to_row, "cursor-up");
+    try gotoCol(allocator, io, pane_id, to_col);
+}
+
+fn gotoCol(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, col: u32) !void {
+    try sendX(allocator, io, pane_id, &.{ "start-of-line" });
+    try moveN(allocator, io, pane_id, col, "cursor-right");
+}
+
+fn moveN(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, n: u32, motion: []const u8) !void {
+    if (n == 0) return;
+    const count = try std.fmt.allocPrint(allocator, "{d}", .{n});
+    try sendX(allocator, io, pane_id, &.{ "-N", count, motion });
+}
+
+fn sendX(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, extra: []const []const u8) !void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(allocator, &.{ "tmux", "send-keys", "-t", pane_id, "-X" });
+    try argv.appendSlice(allocator, extra);
+    _ = try run(allocator, io, argv.items, 64);
 }
 
 pub fn parseQuery(raw: []const u8) !PaneQuery {
-    const line = std.mem.trimEnd(u8, raw, "\r\n");
+    const line = blk: {
+        const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+        if (std.mem.indexOfScalar(u8, trimmed, '\n')) |nl|
+            break :blk std.mem.trim(u8, trimmed[0..nl], " \t\r");
+        break :blk trimmed;
+    };
+    var fields: [16][]const u8 = undefined;
+    var n: usize = 0;
     var it = std.mem.splitScalar(u8, line, '|');
-    const pane_id = it.next() orelse return error.InvalidQuery;
-    const width = try parseU32(it.next() orelse return error.InvalidQuery);
-    const height = try parseU32(it.next() orelse return error.InvalidQuery);
-    const cursor_x = try parseU32(it.next() orelse return error.InvalidQuery);
-    const cursor_y = try parseU32(it.next() orelse return error.InvalidQuery);
-    const in_mode = try parseU32(it.next() orelse return error.InvalidQuery);
-    const copy_cursor_x = try parseU32(it.next() orelse return error.InvalidQuery);
-    const copy_cursor_y = try parseU32(it.next() orelse return error.InvalidQuery);
-    if (it.next() != null) return error.InvalidQuery;
-    if (pane_id.len == 0) return error.InvalidQuery;
+    while (it.next()) |f| {
+        if (n >= fields.len) return error.InvalidQuery;
+        fields[n] = std.mem.trim(u8, f, " \t");
+        n += 1;
+    }
+    if (n < 6 or fields[0].len == 0) return error.InvalidQuery;
     return .{
-        .pane_id = pane_id,
-        .width = width,
-        .height = height,
-        .cursor_x = cursor_x,
-        .cursor_y = cursor_y,
-        .in_mode = in_mode != 0,
-        .copy_cursor_x = copy_cursor_x,
-        .copy_cursor_y = copy_cursor_y,
+        .pane_id = fields[0],
+        .width = try parseU32(fields[1]),
+        .height = try parseU32(fields[2]),
+        .cursor_x = try parseU32(fields[3]),
+        .cursor_y = try parseU32(fields[4]),
+        .in_mode = try parseU32(fields[5]) != 0,
+        .copy_cursor_x = if (n > 6) try parseU32(fields[6]) else 0,
+        .copy_cursor_y = if (n > 7) try parseU32(fields[7]) else 0,
+        .selection_present = if (n > 8) try parseU32(fields[8]) != 0 else false,
+        .scroll_position = if (n > 9) try parseU32(fields[9]) else 0,
     };
 }
 
@@ -84,7 +155,7 @@ fn run(allocator: std.mem.Allocator, io: Io, argv: []const []const u8, stdout_li
 }
 
 test "parse query" {
-    const q = try parseQuery("%2|118|31|1|26|0||\n");
+    const q = try parseQuery("%2|118|31|1|26|0|||0\n");
     try std.testing.expectEqualStrings("%2", q.pane_id);
     try std.testing.expectEqual(@as(u32, 118), q.width);
     try std.testing.expectEqual(@as(u32, 31), q.height);
@@ -93,11 +164,27 @@ test "parse query" {
     try std.testing.expectEqual(false, q.in_mode);
     try std.testing.expectEqual(@as(u32, 0), q.copy_cursor_x);
     try std.testing.expectEqual(@as(u32, 0), q.copy_cursor_y);
+    try std.testing.expectEqual(false, q.selection_present);
+}
+
+test "parse query trailing empty fields" {
+    const q = try parseQuery("%0|121|31|1|26|0|||\n");
+    try std.testing.expectEqualStrings("%0", q.pane_id);
+    try std.testing.expectEqual(@as(u32, 121), q.width);
+    try std.testing.expectEqual(false, q.in_mode);
+    try std.testing.expectEqual(false, q.selection_present);
 }
 
 test "parse query in copy mode" {
-    const q = try parseQuery("%0|80|24|0|0|1|12|7");
+    const q = try parseQuery("%0|80|24|0|0|1|12|7|1");
     try std.testing.expectEqual(true, q.in_mode);
     try std.testing.expectEqual(@as(u32, 12), q.copy_cursor_x);
     try std.testing.expectEqual(@as(u32, 7), q.copy_cursor_y);
+    try std.testing.expectEqual(true, q.selection_present);
+    try std.testing.expectEqual(@as(u32, 0), q.scroll_position);
+}
+
+test "parse query scroll" {
+    const q = try parseQuery("%0|80|24|0|0|1|12|7|0|15");
+    try std.testing.expectEqual(@as(u32, 15), q.scroll_position);
 }
