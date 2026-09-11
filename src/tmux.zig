@@ -39,6 +39,14 @@ pub fn capture(allocator: std.mem.Allocator, io: Io, q: PaneQuery) ![]u8 {
     }, 1024 * 1024);
 }
 
+pub const JumpKind = enum { enter, move, extend };
+
+pub fn jumpKind(in_mode: bool, selection_present: bool) JumpKind {
+    if (!in_mode) return .enter;
+    if (selection_present) return .extend;
+    return .move;
+}
+
 pub fn jump(
     allocator: std.mem.Allocator,
     io: Io,
@@ -48,22 +56,22 @@ pub fn jump(
     snap: PaneQuery,
     still_in_mode: bool,
 ) !void {
-    if (!snap.in_mode) {
-        try enterAt(allocator, io, pane_id, row, col, 0);
-        return;
+    switch (jumpKind(snap.in_mode, snap.selection_present)) {
+        .enter => try enterAt(allocator, io, pane_id, row, col, 0),
+        .move => {
+            if (!still_in_mode) {
+                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, snap.copy_cursor_x, snap.scroll_position);
+            }
+            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
+        },
+        .extend => {
+            if (!still_in_mode) {
+                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, snap.copy_cursor_x, snap.scroll_position);
+                try sendX(allocator, io, pane_id, &.{ "begin-selection" });
+            }
+            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
+        },
     }
-
-    if (still_in_mode) {
-        if (!snap.selection_present) {
-            try sendX(allocator, io, pane_id, &.{ "begin-selection" });
-        }
-        try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
-        return;
-    }
-
-    try enterAt(allocator, io, pane_id, snap.copy_cursor_y, snap.copy_cursor_x, snap.scroll_position);
-    try sendX(allocator, io, pane_id, &.{ "begin-selection" });
-    try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
 }
 
 fn enterAt(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
@@ -187,4 +195,11 @@ test "parse query in copy mode" {
 test "parse query scroll" {
     const q = try parseQuery("%0|80|24|0|0|1|12|7|0|15");
     try std.testing.expectEqual(@as(u32, 15), q.scroll_position);
+}
+
+test "jumpKind" {
+    try std.testing.expectEqual(JumpKind.enter, jumpKind(false, false));
+    try std.testing.expectEqual(JumpKind.enter, jumpKind(false, true));
+    try std.testing.expectEqual(JumpKind.move, jumpKind(true, false));
+    try std.testing.expectEqual(JumpKind.extend, jumpKind(true, true));
 }

@@ -37,7 +37,7 @@ get_option() {
     fi
 }
 
-key=$(get_option "@flash-key" "f")
+key=$(get_option "@flash-key" "s")
 copy_key=$(get_option "@flash-copy-key" "s")
 log "keys prefix=$key copy=$copy_key"
 
