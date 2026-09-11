@@ -63,7 +63,7 @@ pub const Screen = struct {
     pub fn stamp(self: *Screen, row: u32, col: u32, ch: u8) !void {
         const color: u8 = '1' + @as(u8, @intCast(ch % 6));
         var seq: [48]u8 = undefined;
-        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H\x1b[0;3{c}m{c}", .{
+        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H\x1b[0;30;4{c}m{c}", .{
             row + 1,
             col + 1,
             color,
