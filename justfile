@@ -6,7 +6,7 @@ test:
     zig build test
 
 build:
-    zig build
+    zig build -Doptimize=ReleaseFast
 
 visual: build
     test -n "${TMUX:-}" || (echo "run inside tmux" >&2; exit 1)

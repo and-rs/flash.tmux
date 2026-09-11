@@ -9,8 +9,7 @@ pub fn strip(allocator: std.mem.Allocator, src: []const u8) ![]u8 {
             i = skipEsc(src, i);
             continue;
         }
-        try out.append(allocator, src[i]);
-        i += 1;
+        try appendVisible(allocator, &out, src, &i);
     }
     return out.toOwnedSlice(allocator);
 }
@@ -32,8 +31,7 @@ pub fn dim(allocator: std.mem.Allocator, src: []const u8) ![]u8 {
             i = end;
             continue;
         }
-        try out.append(allocator, src[i]);
-        i += 1;
+        try appendVisible(allocator, &out, src, &i);
     }
     return out.toOwnedSlice(allocator);
 }
@@ -51,6 +49,31 @@ const Attrs = struct {
         try out.append(allocator, 'm');
     }
 };
+
+fn appendVisible(allocator: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8, i: *usize) !void {
+    const n = std.unicode.utf8ByteSequenceLength(src[i.*]) catch {
+        try out.append(allocator, src[i.*]);
+        i.* += 1;
+        return;
+    };
+    if (i.* + n > src.len) {
+        try out.append(allocator, src[i.*]);
+        i.* += 1;
+        return;
+    }
+    const bytes = src[i.* .. i.* + n];
+    const cp = std.unicode.utf8Decode(bytes) catch {
+        try out.append(allocator, src[i.*]);
+        i.* += 1;
+        return;
+    };
+    i.* += n;
+    if (cp >= 0x2580 and cp <= 0x259F) {
+        try out.append(allocator, ' ');
+        return;
+    }
+    try out.appendSlice(allocator, bytes);
+}
 
 fn skipEsc(s: []const u8, i: usize) usize {
     if (i + 1 >= s.len) return s.len;
@@ -147,4 +170,10 @@ test "dim keeps bold italic underline" {
     try expectDim("\x1b[0mY", "\x1b[0;90m\x1b[0;90mY");
     try expectDim("\x1b[38;5;4mZ", "\x1b[0;90m\x1b[0;90mZ");
     try expectDim("\x1b[4mU", "\x1b[0;90m\x1b[0;90;4mU");
+}
+
+test "block elements become spaces" {
+    try expectStrip("a\u{2580}\u{2588}b", "a  b");
+    try expectStrip("\x1b[31m\u{2580}\x1b[0mx", " x");
+    try expectDim("a\u{2580}b", "\x1b[0;90ma b");
 }

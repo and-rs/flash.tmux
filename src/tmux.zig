@@ -34,52 +34,35 @@ pub fn launchOverlay(
     height: u32,
     session: []const u8,
 ) !void {
-    const w = try std.fmt.allocPrint(allocator, "{d}", .{width});
-    const h = try std.fmt.allocPrint(allocator, "{d}", .{height});
-    _ = try run(allocator, io, &.{ "tmux", "new-session", "-d", "-s", session, "-x", w, "-y", h }, 64);
-    errdefer killSession(allocator, io, session);
-
-    const target = try std.fmt.allocPrint(allocator, "{s}:", .{session});
-    const ov_raw = try run(allocator, io, &.{ "tmux", "display-message", "-t", target, "-p", "#{pane_id}" }, 64);
-    const ov = std.mem.trim(u8, ov_raw, " \t\r\n");
-    if (ov.len == 0) return error.TmuxFailed;
-
-    _ = run(allocator, io, &.{ "tmux", "set-option", "-t", session, "status", "off" }, 64) catch {};
-    _ = run(allocator, io, &.{ "tmux", "resize-window", "-t", target, "-x", w, "-y", h }, 64) catch {};
-
-    const cmd = try std.fmt.allocPrint(
-        allocator,
-        "/bin/sh -c 'exec \"$1\" --pane=\"$2\" --session=\"$3\"' sh {s} {s} {s}",
-        .{
-            try shellQuote(allocator, bin),
-            try shellQuote(allocator, pane),
-            try shellQuote(allocator, session),
-        },
-    );
-    _ = try run(allocator, io, &.{ "tmux", "respawn-pane", "-k", "-t", ov, cmd }, 64);
-}
-
-fn shellQuote(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
-    var extra: usize = 2;
-    for (s) |c| {
-        if (c == '\'') extra += 3;
-    }
-    const out = try allocator.alloc(u8, s.len + extra);
-    var i: usize = 0;
-    out[i] = '\'';
-    i += 1;
-    for (s) |c| {
-        if (c == '\'') {
-            const esc = "'\\''";
-            @memcpy(out[i..][0..esc.len], esc);
-            i += esc.len;
-        } else {
-            out[i] = c;
-            i += 1;
-        }
-    }
-    out[i] = '\'';
-    return out;
+    var wbuf: [16]u8 = undefined;
+    var hbuf: [16]u8 = undefined;
+    const w = std.fmt.bufPrint(&wbuf, "{d}", .{width}) catch unreachable;
+    const h = std.fmt.bufPrint(&hbuf, "{d}", .{height}) catch unreachable;
+    const pane_arg = try std.fmt.allocPrint(allocator, "--pane={s}", .{pane});
+    const session_arg = try std.fmt.allocPrint(allocator, "--session={s}", .{session});
+    _ = run(allocator, io, &.{
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        session,
+        "-x",
+        w,
+        "-y",
+        h,
+        bin,
+        pane_arg,
+        session_arg,
+        ";",
+        "set-option",
+        "-t",
+        session,
+        "status",
+        "off",
+    }, 64) catch {
+        killSession(allocator, io, session);
+        return error.TmuxFailed;
+    };
 }
 
 pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {
@@ -97,8 +80,10 @@ pub fn capture(allocator: std.mem.Allocator, io: Io, q: PaneQuery) ![]u8 {
 
     const start: i64 = -@as(i64, @intCast(q.scroll_position));
     const end = start + @as(i64, @intCast(q.height)) - 1;
-    const start_arg = try std.fmt.allocPrint(allocator, "{d}", .{start});
-    const end_arg = try std.fmt.allocPrint(allocator, "{d}", .{end});
+    var start_buf: [16]u8 = undefined;
+    var end_buf: [16]u8 = undefined;
+    const start_arg = std.fmt.bufPrint(&start_buf, "{d}", .{start}) catch unreachable;
+    const end_arg = std.fmt.bufPrint(&end_buf, "{d}", .{end}) catch unreachable;
     return run(allocator, io, &.{
         "tmux", "capture-pane", "-t", q.pane_id, "-p", "-e", "-N",
         "-S", start_arg, "-E", end_arg,
@@ -278,17 +263,4 @@ test "jumpKind" {
     try std.testing.expectEqual(JumpKind.extend, jumpKind(true, true));
 }
 
-test "shellQuote" {
-    const a = std.testing.allocator;
-    const plain = try shellQuote(a, "flash_tmux");
-    defer a.free(plain);
-    try std.testing.expectEqualStrings("'flash_tmux'", plain);
 
-    const space = try shellQuote(a, "/opt/flash tmux/bin");
-    defer a.free(space);
-    try std.testing.expectEqualStrings("'/opt/flash tmux/bin'", space);
-
-    const quote = try shellQuote(a, "a'b");
-    defer a.free(quote);
-    try std.testing.expectEqualStrings("'a'\\''b'", quote);
-}

@@ -152,7 +152,7 @@ if [ "$needs_build" -eq 1 ]; then
         fi
         exit 0
     fi
-    if ! (cd "$DIR" && zig build) >>"$LOG" 2>&1; then
+    if ! (cd "$DIR" && zig build -Doptimize=ReleaseFast) >>"$LOG" 2>&1; then
         say "zig build failed (see $LOG)"
         exit 0
     fi
