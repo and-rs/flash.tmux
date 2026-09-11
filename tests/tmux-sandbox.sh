@@ -45,7 +45,7 @@ probe middle FLASH-MARKER-060
 probe bottom FLASH-MARKER-120
 
 if "$interactive"; then
-    popup_cmd="$bin --pane=#{pane_id}"
+    popup_cmd="$(cd "$(dirname "$0")/.." && pwd)/flash-run.sh $bin #{pane_id}"
     "$tmux_bin" -L "$socket" set-option -g mode-keys vi
     "$tmux_bin" -L "$socket" bind-key f display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$popup_cmd"
     "$tmux_bin" -L "$socket" bind-key -T copy-mode-vi s display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$popup_cmd"

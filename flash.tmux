@@ -58,7 +58,7 @@ if [ ! -x "$BIN" ]; then
     exit 0
 fi
 
-popup="tmux display-popup -B -E -x P -y P -w #{pane_width} -h #{pane_height} '$BIN --pane=#{pane_id}'"
+popup="tmux display-popup -B -E -x P -y P -w #{pane_width} -h #{pane_height} \"$DIR/flash-run.sh '$BIN' #{pane_id}\""
 if ! tmux bind-key "$key" run-shell "$popup"; then
     say "bind prefix-$key failed"
     exit 0
