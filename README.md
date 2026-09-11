@@ -1,6 +1,6 @@
 # flash.tmux
 
-Leap around a tmux pane like flash.nvim. Needs Zig 0.16.
+Leap around a tmux pane like flash.nvim. Zig 0.16.
 
 ## Install
 
@@ -10,14 +10,13 @@ TPM:
 set -g @plugin 'and-rs/flash.tmux'
 ```
 
-Or `source-file /path/to/flash.tmux`. Builds `zig-out/bin/flash_tmux` on first
-load if missing.
+Or `tmux run-shell /path/to/flash.tmux`. Builds the binary on first load if missing.
 
 ## Keys
 
 |              | default                 |
 | ------------ | ----------------------- |
-| prefix       | `f` (`@flash-key`)      |
+| prefix       | `s` (`@flash-key`)      |
 | copy-mode-vi | `s` (`@flash-copy-key`) |
 
 Type a pattern, then a label. Esc aborts. Enter jumps the nearest match.
@@ -27,6 +26,6 @@ Type a pattern, then a label. Esc aborts. Enter jumps the nearest match.
 ```
 just test
 just build
-just visual # inside tmux
+just visual      # inside tmux
 just tmux-test
 ```
