@@ -45,10 +45,10 @@ probe middle FLASH-MARKER-060
 probe bottom FLASH-MARKER-120
 
 if "$interactive"; then
-    popup_cmd="$(cd "$(dirname "$0")/.." && pwd)/flash-run.sh $bin #{pane_id}"
+    open_cmd="$(cd "$(dirname "$0")/.." && pwd)/scripts/flash-open.sh $bin #{pane_id} #{pane_width} #{pane_height}"
     "$tmux_bin" -L "$socket" set-option -g mode-keys vi
-    "$tmux_bin" -L "$socket" bind-key f display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$popup_cmd"
-    "$tmux_bin" -L "$socket" bind-key -T copy-mode-vi s display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$popup_cmd"
+    "$tmux_bin" -L "$socket" bind-key f run-shell -b "$open_cmd"
+    "$tmux_bin" -L "$socket" bind-key -T copy-mode-vi s run-shell -b "$open_cmd"
     "$tmux_bin" -L "$socket" send-keys -t "$pane" -X cancel
     printf 'sandbox: prefix-f at bottom; [ then scroll, then s. Detach with prefix-d.\n'
     "$tmux_bin" -L "$socket" attach-session -t "$session"

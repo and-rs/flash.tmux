@@ -58,12 +58,12 @@ if [ ! -x "$BIN" ]; then
     exit 0
 fi
 
-popup="tmux display-popup -B -E -x P -y P -w #{pane_width} -h #{pane_height} \"$DIR/flash-run.sh '$BIN' #{pane_id}\""
-if ! tmux bind-key "$key" run-shell "$popup"; then
+open="$DIR/scripts/flash-open.sh '$BIN' #{pane_id} #{pane_width} #{pane_height}"
+if ! tmux bind-key "$key" run-shell -b "$open"; then
     say "bind prefix-$key failed"
     exit 0
 fi
-if ! tmux bind-key -T copy-mode-vi "$copy_key" run-shell "$popup"; then
+if ! tmux bind-key -T copy-mode-vi "$copy_key" run-shell -b "$open"; then
     say "bind copy-mode-vi $copy_key failed"
     exit 0
 fi

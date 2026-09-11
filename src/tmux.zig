@@ -17,6 +17,10 @@ pub const PaneQuery = struct {
     scroll_position: u32,
 };
 
+pub fn swapPanes(allocator: std.mem.Allocator, io: Io, a: []const u8, b: []const u8) void {
+    _ = run(allocator, io, &.{ "tmux", "swap-pane", "-s", a, "-t", b }, 64) catch {};
+}
+
 pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {
     const raw = if (pane_id) |id|
         try run(allocator, io, &.{ "tmux", "display-message", "-t", id, "-p", query_format }, 4096)

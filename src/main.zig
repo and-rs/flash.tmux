@@ -10,6 +10,11 @@ pub fn main(init: std.process.Init) !void {
     };
 }
 
+fn swapIn(init: std.process.Init, source: []const u8) void {
+    const ov = init.minimal.environ.getPosix("TMUX_PANE") orelse return;
+    flash_tmux.tmux.swapPanes(init.arena.allocator(), init.io, ov, source);
+}
+
 fn run(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
     const io = init.io;
@@ -40,6 +45,7 @@ fn run(init: std.process.Init) !void {
         var screen = try flash_tmux.tty.Screen.enter(io);
         defer screen.restore();
         try paint(&screen, dim, &state);
+        swapIn(init, pane_id);
 
         while (true) {
             const b = try screen.readByte();
@@ -56,12 +62,15 @@ fn run(init: std.process.Init) !void {
 }
 
 fn holdError(init: std.process.Init, err: anyerror) void {
+    const args = init.minimal.args.toSlice(init.arena.allocator()) catch &.{};
+    if (parseArgs(args)) |opts| {
+        if (opts.pane) |p| swapIn(init, p);
+    } else |_| {}
     const io = init.io;
     var out_buf: [1024]u8 = undefined;
     var writer = std.Io.File.Writer.init(.stderr(), io, &out_buf);
     const w = &writer.interface;
     w.print("flash.tmux error: {s}\nargs:\n", .{@errorName(err)}) catch {};
-    const args = init.minimal.args.toSlice(init.arena.allocator()) catch &.{};
     for (args) |a| w.print("  {s}\n", .{a}) catch {};
     w.print("press enter\n", .{}) catch {};
     w.flush() catch {};
