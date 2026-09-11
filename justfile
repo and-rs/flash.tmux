@@ -10,12 +10,12 @@ build:
 
 visual: build
     test -n "${TMUX:-}" || (echo "run inside tmux" >&2; exit 1)
-    "{{justfile_directory()}}/scripts/flash-open.sh" "{{bin}}" "${TMUX_PANE}" $(tmux display-message -p '#{pane_width} #{pane_height}')
+    "{{bin}}" --pane="${TMUX_PANE}"
 
 visual-copy: build
     test -n "${TMUX:-}" || (echo "run inside tmux" >&2; exit 1)
     tmux copy-mode
-    "{{justfile_directory()}}/scripts/flash-open.sh" "{{bin}}" "${TMUX_PANE}" $(tmux display-message -p '#{pane_width} #{pane_height}')
+    "{{bin}}" --pane="${TMUX_PANE}"
 
 tmux-test: build
     ./tests/tmux-sandbox.sh "{{bin}}"

@@ -45,7 +45,7 @@ probe middle FLASH-MARKER-060
 probe bottom FLASH-MARKER-120
 
 if "$interactive"; then
-    open_cmd="$(cd "$(dirname "$0")/.." && pwd)/scripts/flash-open.sh $bin #{pane_id} #{pane_width} #{pane_height}"
+    open_cmd="'$bin' --pane=#{pane_id}"
     "$tmux_bin" -L "$socket" set-option -g mode-keys vi
     "$tmux_bin" -L "$socket" bind-key f run-shell -b "$open_cmd"
     "$tmux_bin" -L "$socket" bind-key -T copy-mode-vi s run-shell -b "$open_cmd"

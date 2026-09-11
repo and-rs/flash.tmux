@@ -58,7 +58,7 @@ if [ ! -x "$BIN" ]; then
     exit 0
 fi
 
-open="$DIR/scripts/flash-open.sh '$BIN' #{pane_id} #{pane_width} #{pane_height}"
+open="'$BIN' --pane=#{pane_id}"
 if ! tmux bind-key "$key" run-shell -b "$open"; then
     say "bind prefix-$key failed"
     exit 0

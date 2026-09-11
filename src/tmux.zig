@@ -21,6 +21,67 @@ pub fn swapPanes(allocator: std.mem.Allocator, io: Io, a: []const u8, b: []const
     _ = run(allocator, io, &.{ "tmux", "swap-pane", "-s", a, "-t", b }, 64) catch {};
 }
 
+pub fn killSession(allocator: std.mem.Allocator, io: Io, session: []const u8) void {
+    _ = run(allocator, io, &.{ "tmux", "kill-session", "-t", session }, 64) catch {};
+}
+
+pub fn launchOverlay(
+    allocator: std.mem.Allocator,
+    io: Io,
+    bin: []const u8,
+    pane: []const u8,
+    width: u32,
+    height: u32,
+    session: []const u8,
+) !void {
+    const w = try std.fmt.allocPrint(allocator, "{d}", .{width});
+    const h = try std.fmt.allocPrint(allocator, "{d}", .{height});
+    _ = try run(allocator, io, &.{ "tmux", "new-session", "-d", "-s", session, "-x", w, "-y", h }, 64);
+    errdefer killSession(allocator, io, session);
+
+    const target = try std.fmt.allocPrint(allocator, "{s}:", .{session});
+    const ov_raw = try run(allocator, io, &.{ "tmux", "display-message", "-t", target, "-p", "#{pane_id}" }, 64);
+    const ov = std.mem.trim(u8, ov_raw, " \t\r\n");
+    if (ov.len == 0) return error.TmuxFailed;
+
+    _ = run(allocator, io, &.{ "tmux", "set-option", "-t", session, "status", "off" }, 64) catch {};
+    _ = run(allocator, io, &.{ "tmux", "resize-window", "-t", target, "-x", w, "-y", h }, 64) catch {};
+
+    const cmd = try std.fmt.allocPrint(
+        allocator,
+        "/bin/sh -c 'exec \"$1\" --pane=\"$2\" --session=\"$3\"' sh {s} {s} {s}",
+        .{
+            try shellQuote(allocator, bin),
+            try shellQuote(allocator, pane),
+            try shellQuote(allocator, session),
+        },
+    );
+    _ = try run(allocator, io, &.{ "tmux", "respawn-pane", "-k", "-t", ov, cmd }, 64);
+}
+
+fn shellQuote(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    var extra: usize = 2;
+    for (s) |c| {
+        if (c == '\'') extra += 3;
+    }
+    const out = try allocator.alloc(u8, s.len + extra);
+    var i: usize = 0;
+    out[i] = '\'';
+    i += 1;
+    for (s) |c| {
+        if (c == '\'') {
+            const esc = "'\\''";
+            @memcpy(out[i..][0..esc.len], esc);
+            i += esc.len;
+        } else {
+            out[i] = c;
+            i += 1;
+        }
+    }
+    out[i] = '\'';
+    return out;
+}
+
 pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {
     const raw = if (pane_id) |id|
         try run(allocator, io, &.{ "tmux", "display-message", "-t", id, "-p", query_format }, 4096)
@@ -215,4 +276,19 @@ test "jumpKind" {
     try std.testing.expectEqual(JumpKind.enter, jumpKind(false, true));
     try std.testing.expectEqual(JumpKind.move, jumpKind(true, false));
     try std.testing.expectEqual(JumpKind.extend, jumpKind(true, true));
+}
+
+test "shellQuote" {
+    const a = std.testing.allocator;
+    const plain = try shellQuote(a, "flash_tmux");
+    defer a.free(plain);
+    try std.testing.expectEqualStrings("'flash_tmux'", plain);
+
+    const space = try shellQuote(a, "/opt/flash tmux/bin");
+    defer a.free(space);
+    try std.testing.expectEqualStrings("'/opt/flash tmux/bin'", space);
+
+    const quote = try shellQuote(a, "a'b");
+    defer a.free(quote);
+    try std.testing.expectEqualStrings("'a'\\''b'", quote);
 }

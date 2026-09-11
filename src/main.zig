@@ -4,27 +4,84 @@ const flash_tmux = @import("flash_tmux");
 const flash = flash_tmux.flash;
 
 pub fn main(init: std.process.Init) !void {
-    run(init) catch |err| {
+    const arena = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(arena);
+    const opts = try parseArgs(args);
+
+    if (opts.inspect) {
+        try inspect(init, opts);
+        return;
+    }
+
+    if (opts.session == null) {
+        try launch(init, opts.pane);
+        return;
+    }
+
+    const source = opts.pane orelse return error.MissingPane;
+    var overlay = Overlay{
+        .init = init,
+        .source = source,
+        .session = opts.session.?,
+    };
+    defer overlay.close();
+
+    runUi(init, opts, &overlay) catch |err| {
+        overlay.reveal();
         holdError(init, err);
         return err;
     };
 }
+
+const Overlay = struct {
+    init: std.process.Init,
+    source: []const u8,
+    session: []const u8,
+    shown: bool = false,
+
+    fn reveal(self: *Overlay) void {
+        if (self.shown) return;
+        swapIn(self.init, self.source);
+        self.shown = true;
+    }
+
+    fn close(self: *Overlay) void {
+        if (self.shown) {
+            swapIn(self.init, self.source);
+            self.shown = false;
+        }
+        flash_tmux.tmux.killSession(self.init.arena.allocator(), self.init.io, self.session);
+    }
+};
 
 fn swapIn(init: std.process.Init, source: []const u8) void {
     const ov = init.minimal.environ.getPosix("TMUX_PANE") orelse return;
     flash_tmux.tmux.swapPanes(init.arena.allocator(), init.io, ov, source);
 }
 
-fn run(init: std.process.Init) !void {
+fn launch(init: std.process.Init, pane: ?[]const u8) !void {
+    const arena = init.arena.allocator();
+    const io = init.io;
+    const q = try flash_tmux.tmux.query(arena, io, pane);
+    const bin = try std.process.executablePathAlloc(io, arena);
+    const session = try std.fmt.allocPrint(arena, "flash{d}", .{std.posix.system.getpid()});
+    try flash_tmux.tmux.launchOverlay(arena, io, bin, q.pane_id, q.width, q.height, session);
+}
+
+fn inspect(init: std.process.Init, opts: Args) !void {
+    const arena = init.arena.allocator();
+    const q = try flash_tmux.tmux.query(arena, init.io, opts.pane);
+    const raw = try flash_tmux.tmux.capture(arena, init.io, q);
+    try printSnapshot(init.io, q, raw);
+}
+
+fn runUi(init: std.process.Init, opts: Args, overlay: *Overlay) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
     const io = init.io;
-    const args = try init.minimal.args.toSlice(arena);
-    const opts = try parseArgs(args);
 
     const q = try flash_tmux.tmux.query(arena, io, opts.pane);
     const pane_id = q.pane_id;
     const raw = try flash_tmux.tmux.capture(arena, io, q);
-    if (opts.inspect) return printSnapshot(io, q, raw);
     const plain = try flash_tmux.sgr.strip(arena, raw);
     const dim = try flash_tmux.sgr.dim(arena, raw);
     const lines = try splitLines(arena, plain);
@@ -45,7 +102,7 @@ fn run(init: std.process.Init) !void {
         var screen = try flash_tmux.tty.Screen.enter(io);
         defer screen.restore();
         try paint(&screen, dim, &state);
-        swapIn(init, pane_id);
+        overlay.reveal();
 
         while (true) {
             const b = try screen.readByte();
@@ -63,9 +120,6 @@ fn run(init: std.process.Init) !void {
 
 fn holdError(init: std.process.Init, err: anyerror) void {
     const args = init.minimal.args.toSlice(init.arena.allocator()) catch &.{};
-    if (parseArgs(args)) |opts| {
-        if (opts.pane) |p| swapIn(init, p);
-    } else |_| {}
     const io = init.io;
     var out_buf: [1024]u8 = undefined;
     var writer = std.Io.File.Writer.init(.stderr(), io, &out_buf);
@@ -84,6 +138,7 @@ fn holdError(init: std.process.Init, err: anyerror) void {
 
 const Args = struct {
     pane: ?[]const u8 = null,
+    session: ?[]const u8 = null,
     inspect: bool = false,
 };
 
@@ -102,6 +157,14 @@ fn parseArgs(args: []const []const u8) !Args {
             i += 1;
             if (i >= args.len or args[i].len == 0) return error.MissingPane;
             out.pane = args[i];
+        } else if (std.mem.startsWith(u8, a, "--session=")) {
+            const v = a["--session=".len..];
+            if (v.len == 0) return error.MissingSession;
+            out.session = v;
+        } else if (std.mem.eql(u8, a, "--session")) {
+            i += 1;
+            if (i >= args.len or args[i].len == 0) return error.MissingSession;
+            out.session = args[i];
         }
     }
     return out;
