@@ -1,32 +1,70 @@
 #!/bin/sh
-set -eu
 
-DIR=$(dirname "$0")
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BIN="$DIR/zig-out/bin/flash_tmux"
+LOG="${TMPDIR:-/tmp}/flash.tmux.log"
+
+log() {
+	printf '%s %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo --)" "$*" >>"$LOG"
+}
+
+say() {
+	log "$1"
+	tmux display-message "flash.tmux: $1" || true
+}
+
+log "start 0=$0 dir=$DIR"
+log "PATH=$PATH"
+
+if ! command -v zig >/dev/null 2>&1; then
+	env_path=$(tmux show-environment -g PATH 2>/dev/null || true)
+	case "$env_path" in
+	PATH=*)
+		PATH="${env_path#PATH=}"
+		export PATH
+		log "adopted tmux PATH"
+		;;
+	esac
+fi
 
 get_option() {
-    val=$(tmux show-option -gqv "$1" || true)
-    if [ -z "$val" ]; then
-        printf '%s\n' "$2"
-    else
-        printf '%s\n' "$val"
-    fi
+	val=$(tmux show-option -gqv "$1" 2>/dev/null || true)
+	if [ -z "$val" ]; then
+		printf '%s\n' "$2"
+	else
+		printf '%s\n' "$val"
+	fi
 }
 
 key=$(get_option "@flash-key" "f")
 copy_key=$(get_option "@flash-copy-key" "s")
+log "keys prefix=$key copy=$copy_key"
 
 if [ ! -x "$BIN" ]; then
-    if ! command -v zig >/dev/null 2>&1; then
-        tmux display-message "flash.tmux: zig not found"
-        exit 0
-    fi
-    if ! (cd "$DIR" && zig build); then
-        tmux display-message "flash.tmux: zig build failed"
-        exit 0
-    fi
+	say "building"
+	if ! command -v zig >/dev/null 2>&1; then
+		say "zig not on PATH (see $LOG)"
+		exit 0
+	fi
+	if ! (cd "$DIR" && zig build) >>"$LOG" 2>&1; then
+		say "zig build failed (see $LOG)"
+		exit 0
+	fi
+fi
+
+if [ ! -x "$BIN" ]; then
+	say "missing $BIN"
+	exit 0
 fi
 
 cmd="'$BIN' --pane=#{pane_id}"
-tmux bind-key "$key" display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$cmd"
-tmux bind-key -T copy-mode-vi "$copy_key" display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$cmd"
+if ! tmux bind-key "$key" display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$cmd"; then
+	say "bind prefix-$key failed"
+	exit 0
+fi
+if ! tmux bind-key -T copy-mode-vi "$copy_key" display-popup -B -E -x P -y P -w '#{pane_width}' -h '#{pane_height}' "$cmd"; then
+	say "bind copy-mode-vi $copy_key failed"
+	exit 0
+fi
+
+say "ready prefix-$key copy-$copy_key"
