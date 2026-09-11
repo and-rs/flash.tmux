@@ -5,7 +5,22 @@ DIR=$(cd -- "$DIR" && pwd)
 BIN="$DIR/zig-out/bin/flash_tmux"
 LOG="${TMPDIR:-/tmp}/flash.tmux.log"
 
+get_option() {
+    val=$(tmux show-option -gqv "$1" 2>/dev/null || true)
+    if [ -z "$val" ]; then
+        printf '%s\n' "$2"
+    else
+        printf '%s\n' "$val"
+    fi
+}
+
+debug=0
+case $(get_option "@flash-debug" "") in
+    1|on|true|yes) debug=1 ;;
+esac
+
 log() {
+    [ "$debug" -eq 1 ] || return 0
     printf '%s %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo --)" "$*" >>"$LOG"
 }
 
@@ -28,23 +43,14 @@ if ! command -v zig >/dev/null 2>&1; then
     esac
 fi
 
-get_option() {
-    val=$(tmux show-option -gqv "$1" 2>/dev/null || true)
-    if [ -z "$val" ]; then
-        printf '%s\n' "$2"
-    else
-        printf '%s\n' "$val"
-    fi
-}
-
 key=$(get_option "@flash-key" "s")
 copy_key=$(get_option "@flash-copy-key" "s")
 log "keys prefix=$key copy=$copy_key"
 
 if [ ! -x "$BIN" ]; then
-    say "building"
+    log "building"
     if ! command -v zig >/dev/null 2>&1; then
-        say "zig not on PATH (see $LOG)"
+        say "zig not on PATH"
         exit 0
     fi
     if ! (cd "$DIR" && zig build) >>"$LOG" 2>&1; then
@@ -68,4 +74,4 @@ if ! tmux bind-key -T copy-mode-vi "$copy_key" run-shell -b "$open"; then
     exit 0
 fi
 
-say "ready prefix-$key copy-$copy_key"
+log "ready prefix-$key copy-$copy_key"

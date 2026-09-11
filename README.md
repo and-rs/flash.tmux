@@ -18,8 +18,9 @@ Or `tmux run-shell /path/to/flash.tmux`. Builds the binary on first load if miss
 | ------------ | ----------------------- |
 | prefix       | `s` (`@flash-key`)      |
 | copy-mode-vi | `s` (`@flash-copy-key`) |
+| debug        | off (`@flash-debug`)    |
 
-Type a pattern, then a label. Esc aborts. Enter jumps the nearest match.
+Type a pattern, then a label. Esc aborts. Enter jumps the nearest match. `@flash-debug` `1`/`on`/`true`/`yes` logs to `/tmp/flash.tmux.log`.
 
 ## Dev
 
