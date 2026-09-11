@@ -2,8 +2,8 @@ const std = @import("std");
 const Io = std.Io;
 const posix = std.posix;
 
-const enter_seq = "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[H\x1b[2J";
-const leave_seq = "\x1b[?25h\x1b[?7h\x1b[?1049l";
+const enter_seq = "\x1b[?25l\x1b[?7l";
+const leave_seq = "\x1b[?25h\x1b[?7h";
 
 pub const Screen = struct {
     io: Io,
@@ -48,6 +48,12 @@ pub const Screen = struct {
         try self.writeAll(std.mem.trimEnd(u8, text, "\n"));
     }
 
+    pub fn park(self: *Screen, row: u32, col: u32) !void {
+        var seq: [32]u8 = undefined;
+        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H", .{ row + 1, col + 1 }) catch unreachable;
+        try self.writeAll(n);
+    }
+
     pub fn readByte(self: *Screen) !u8 {
         var buf: [64]u8 = undefined;
         var reader = Io.File.Reader.initStreaming(self.stdin, self.io, &buf);
@@ -55,8 +61,14 @@ pub const Screen = struct {
     }
 
     pub fn stamp(self: *Screen, row: u32, col: u32, ch: u8) !void {
-        var seq: [32]u8 = undefined;
-        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H\x1b[7m{c}\x1b[27m", .{ row + 1, col + 1, ch }) catch unreachable;
+        const color: u8 = '1' + @as(u8, @intCast(ch % 6));
+        var seq: [48]u8 = undefined;
+        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H\x1b[0;3{c}m{c}", .{
+            row + 1,
+            col + 1,
+            color,
+            ch,
+        }) catch unreachable;
         try self.writeAll(n);
     }
 

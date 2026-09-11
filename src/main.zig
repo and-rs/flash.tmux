@@ -18,9 +18,11 @@ fn run(init: std.process.Init) !void {
 
     const q = try flash_tmux.tmux.query(arena, io, opts.pane);
     const pane_id = q.pane_id;
-    const text = try flash_tmux.tmux.capture(arena, io, q);
-    if (opts.inspect) return printSnapshot(io, q, text);
-    const lines = try splitLines(arena, text);
+    const raw = try flash_tmux.tmux.capture(arena, io, q);
+    if (opts.inspect) return printSnapshot(io, q, raw);
+    const plain = try flash_tmux.sgr.strip(arena, raw);
+    const dim = try flash_tmux.sgr.dim(arena, raw);
+    const lines = try splitLines(arena, plain);
 
     const cursor: flash.Pos = if (q.in_mode)
         .{ .row = q.copy_cursor_y, .col = q.copy_cursor_x }
@@ -37,19 +39,19 @@ fn run(init: std.process.Init) !void {
     {
         var screen = try flash_tmux.tty.Screen.enter(io);
         defer screen.restore();
-        try paint(&screen, text, &state);
+        try paint(&screen, dim, &state);
 
         while (true) {
             const b = try screen.readByte();
             if (b == 0x03) break;
             if (!try state.step(b)) break;
-            try paint(&screen, text, &state);
+            try paint(&screen, dim, &state);
         }
     }
 
     if (state.jumped) |m| {
         const now = try flash_tmux.tmux.query(arena, io, pane_id);
-        try flash_tmux.tmux.jump(arena, io, pane_id, m.pos.row, m.pos.col, q, now.in_mode);
+        try flash_tmux.tmux.jump(arena, io, pane_id, m.pos.row, m.pos.col, q, now.in_mode, lines);
     }
 }
 
@@ -114,6 +116,7 @@ fn paint(screen: *flash_tmux.tty.Screen, text: []const u8, state: *flash.State) 
         if (m.pos.row >= state.grid.lines.len) continue;
         try screen.stamp(m.pos.row, flash.labelCol(m, state.grid.width), lab);
     }
+    try screen.park(state.grid.cursor.row, state.grid.cursor.col);
 }
 
 fn splitLines(allocator: std.mem.Allocator, text: []const u8) ![]const []const u8 {

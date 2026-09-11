@@ -60,6 +60,45 @@ pub fn labelCol(m: Match, pane_width: u32) u32 {
     return after;
 }
 
+pub fn cursorRights(line: []const u8, target_col: u32) u32 {
+    var col: u32 = 0;
+    var rights: u32 = 0;
+    var i: usize = 0;
+    while (i < line.len and col < target_col) {
+        if (line[i] == 0x09) {
+            const rem = col % tabstop;
+            col += if (rem == 0) tabstop else tabstop - rem;
+            rights += 1;
+            i += 1;
+            continue;
+        }
+        const n = std.unicode.utf8ByteSequenceLength(line[i]) catch {
+            col += 1;
+            rights += 1;
+            i += 1;
+            continue;
+        };
+        if (i + n > line.len) {
+            col += 1;
+            rights += 1;
+            i += 1;
+            continue;
+        }
+        const cp = std.unicode.utf8Decode(line[i .. i + n]) catch {
+            col += 1;
+            rights += 1;
+            i += 1;
+            continue;
+        };
+        i += n;
+        const w = codeWidth(cp);
+        if (w == 0) continue;
+        col += w;
+        rights += 1;
+    }
+    return rights;
+}
+
 pub const Opts = struct {
     labels: []const u8 = "asdfghjklqwertyuiopzxcvbnm",
     uppercase: bool = true,
@@ -655,6 +694,15 @@ test "autojump single match" {
 
     try std.testing.expect(!try state.step('h'));
     try std.testing.expectEqual(Pos{ .row = 0, .col = 0 }, state.jumped.?.pos);
+}
+
+test "cursorRights tabs and wide" {
+    try std.testing.expectEqual(@as(u32, 0), cursorRights("\tmodified:", 0));
+    try std.testing.expectEqual(@as(u32, 1), cursorRights("\tmodified:", 8));
+    try std.testing.expectEqual(@as(u32, 2), cursorRights("\tmodified:", 9));
+    try std.testing.expectEqual(@as(u32, 3), cursorRights("hello", 3));
+    try std.testing.expectEqual(@as(u32, 1), cursorRights("あa", 2));
+    try std.testing.expectEqual(@as(u32, 2), cursorRights("あa", 3));
 }
 
 test "tab expands to tabstop; label sits after match" {

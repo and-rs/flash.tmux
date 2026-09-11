@@ -1,5 +1,6 @@
 const std = @import("std");
 const Io = std.Io;
+const flash = @import("flash.zig");
 
 const query_format = "#{pane_id}|#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{?pane_in_mode,1,0}|#{copy_cursor_x}|#{copy_cursor_y}|#{?selection_present,1,0}|#{scroll_position}";
 
@@ -26,7 +27,7 @@ pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQu
 
 pub fn capture(allocator: std.mem.Allocator, io: Io, q: PaneQuery) ![]u8 {
     if (!q.in_mode) {
-        return run(allocator, io, &.{ "tmux", "capture-pane", "-t", q.pane_id, "-p", "-N" }, 1024 * 1024);
+        return run(allocator, io, &.{ "tmux", "capture-pane", "-t", q.pane_id, "-p", "-e", "-N" }, 1024 * 1024);
     }
 
     const start: i64 = -@as(i64, @intCast(q.scroll_position));
@@ -34,7 +35,7 @@ pub fn capture(allocator: std.mem.Allocator, io: Io, q: PaneQuery) ![]u8 {
     const start_arg = try std.fmt.allocPrint(allocator, "{d}", .{start});
     const end_arg = try std.fmt.allocPrint(allocator, "{d}", .{end});
     return run(allocator, io, &.{
-        "tmux", "capture-pane", "-t", q.pane_id, "-p", "-N",
+        "tmux", "capture-pane", "-t", q.pane_id, "-p", "-e", "-N",
         "-S", start_arg, "-E", end_arg,
     }, 1024 * 1024);
 }
@@ -55,23 +56,31 @@ pub fn jump(
     col: u32,
     snap: PaneQuery,
     still_in_mode: bool,
+    lines: []const []const u8,
 ) !void {
+    const to = flash.cursorRights(lineAt(lines, row), col);
+    const from = flash.cursorRights(lineAt(lines, snap.copy_cursor_y), snap.copy_cursor_x);
     switch (jumpKind(snap.in_mode, snap.selection_present)) {
-        .enter => try enterAt(allocator, io, pane_id, row, col, 0),
+        .enter => try enterAt(allocator, io, pane_id, row, to, 0),
         .move => {
             if (!still_in_mode) {
-                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, snap.copy_cursor_x, snap.scroll_position);
+                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, from, snap.scroll_position);
             }
-            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
+            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, to);
         },
         .extend => {
             if (!still_in_mode) {
-                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, snap.copy_cursor_x, snap.scroll_position);
+                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, from, snap.scroll_position);
                 try sendX(allocator, io, pane_id, &.{ "begin-selection" });
             }
-            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, col);
+            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, to);
         },
     }
+}
+
+fn lineAt(lines: []const []const u8, row: u32) []const u8 {
+    if (row >= lines.len) return "";
+    return lines[row];
 }
 
 fn enterAt(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
