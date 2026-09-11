@@ -14,6 +14,8 @@ jobs:
         with:
           version: "0.16.0"
       - run: zig build test
+      - name: Check VERSION matches tag
+        run: test "$(tr -d ' \t\r\n' < VERSION)" = "${GITHUB_REF_NAME}"
       - name: Build release assets
         run: |
           set -e

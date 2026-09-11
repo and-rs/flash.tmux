@@ -2,11 +2,17 @@ const std = @import("std");
 
 const flash_tmux = @import("flash_tmux");
 const flash = flash_tmux.flash;
+const build_options = @import("build_options");
 
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
     const opts = try parseArgs(args);
+
+    if (opts.version) {
+        try printVersion(init);
+        return;
+    }
 
     if (opts.inspect) {
         try inspect(init, opts);
@@ -140,6 +146,7 @@ const Args = struct {
     pane: ?[]const u8 = null,
     session: ?[]const u8 = null,
     inspect: bool = false,
+    version: bool = false,
 };
 
 fn parseArgs(args: []const []const u8) !Args {
@@ -147,7 +154,9 @@ fn parseArgs(args: []const []const u8) !Args {
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
-        if (std.mem.eql(u8, a, "--inspect")) {
+        if (std.mem.eql(u8, a, "--version")) {
+            out.version = true;
+        } else if (std.mem.eql(u8, a, "--inspect")) {
             out.inspect = true;
         } else if (std.mem.startsWith(u8, a, "--pane=")) {
             const v = a["--pane=".len..];
@@ -168,6 +177,14 @@ fn parseArgs(args: []const []const u8) !Args {
         }
     }
     return out;
+}
+
+fn printVersion(init: std.process.Init) !void {
+    var out_buf: [64]u8 = undefined;
+    var writer = std.Io.File.Writer.init(.stdout(), init.io, &out_buf);
+    const w = &writer.interface;
+    try w.print("{s}\n", .{build_options.version});
+    try w.flush();
 }
 
 fn printSnapshot(io: std.Io, q: flash_tmux.tmux.PaneQuery, text: []const u8) !void {
@@ -203,4 +220,13 @@ fn splitLines(allocator: std.mem.Allocator, text: []const u8) ![]const []const u
     var it = std.mem.splitScalar(u8, trimmed, '\n');
     while (it.next()) |line| : (i += 1) lines[i] = line;
     return lines;
+}
+
+test "parse --version" {
+    const opts = try parseArgs(&.{ "flash_tmux", "--version" });
+    try std.testing.expect(opts.version);
+}
+
+test "embedded version" {
+    try std.testing.expect(build_options.version.len > 0);
 }

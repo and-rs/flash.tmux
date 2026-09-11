@@ -37,6 +37,9 @@ release-build:
     cp zig-out/bin/flash_tmux dist/flash_tmux-freebsd-x86_64
     (cd dist && sha256sum flash_tmux-* > SHA256SUMS)
 
-release version:
-    git tag -a "{{version}}" -m "{{version}}"
-    git push origin "{{version}}"
+release:
+    #!/usr/bin/env sh
+    set -eu
+    version=$(tr -d ' \t\r\n' < VERSION)
+    git tag -a "$version" -m "$version"
+    git push origin "$version"

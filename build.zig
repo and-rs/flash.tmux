@@ -4,6 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const version = std.mem.trim(u8, @embedFile("VERSION"), " \t\r\n");
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
+
     const mod = b.addModule("flash_tmux", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -20,6 +24,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.root_module.addOptions("build_options", options);
 
     b.installArtifact(exe);
 

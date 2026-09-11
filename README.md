@@ -8,7 +8,7 @@ Leap around a tmux pane like flash.nvim. Zig 0.16.
 set -g @plugin 'and-rs/flash.tmux'
 ```
 
-Or `tmux run-shell /path/to/flash.tmux`. Fetches the latest release binary on first load and checks its SHA-256; Zig is used if that fails. Without Zig, tmux reports the failure and required next step.
+Or `tmux run-shell /path/to/flash.tmux`. Fetches the release binary matching `VERSION` on first load and again after the plugin updates (TPM). Checks SHA-256; Zig is used if that fails. Without Zig, tmux reports the failure and required next step.
 
 For local development, use the development entry point instead. It always builds the checkout with Zig and never fetches a release:
 

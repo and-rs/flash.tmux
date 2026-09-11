@@ -91,9 +91,23 @@ file_sha256() {
     fi
 }
 
+plugin_version() {
+    tr -d ' \t\r\n' < "$DIR/VERSION" 2>/dev/null || true
+}
+
+bin_current() {
+    ver=$(plugin_version)
+    [ -n "$ver" ] || return 1
+    [ -x "$BIN" ] || return 1
+    got=$("$BIN" --version 2>/dev/null) || return 1
+    [ "$got" = "$ver" ]
+}
+
 fetch_release() {
     asset=$(release_asset) || return 1
-    base="https://github.com/and-rs/flash.tmux/releases/latest/download"
+    ver=$(plugin_version)
+    [ -n "$ver" ] || return 1
+    base="https://github.com/and-rs/flash.tmux/releases/download/$ver"
     log "fetch $base/$asset"
     mkdir -p "$DIR/zig-out/bin" || return 1
     tmp="$BIN.$$"
@@ -121,20 +135,29 @@ fetch_release() {
         rm -f "$tmp"
         return 1
     }
+    got=$("$tmp" --version 2>/dev/null) || {
+        rm -f "$tmp"
+        return 1
+    }
+    if [ "$got" != "$ver" ]; then
+        rm -f "$tmp"
+        return 1
+    fi
     mv "$tmp" "$BIN" || {
         rm -f "$tmp"
         return 1
     }
-    log "fetched latest $asset"
+    log "fetched $ver $asset"
 }
 
 needs_build=0
 if [ "${FLASH_TMUX_DEV:-0}" -eq 1 ]; then
     needs_build=1
-elif [ ! -x "$BIN" ]; then
+elif ! bin_current; then
     if ! fetch_release; then
-        log "release fetch or checksum verification failed"
+        log "release fetch or validation failed"
         release_failed=1
+        needs_build=1
     fi
 fi
 
