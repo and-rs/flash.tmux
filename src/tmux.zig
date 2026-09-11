@@ -86,7 +86,7 @@ pub fn capture(allocator: std.mem.Allocator, io: Io, q: PaneQuery) ![]u8 {
     const end_arg = std.fmt.bufPrint(&end_buf, "{d}", .{end}) catch unreachable;
     return run(allocator, io, &.{
         "tmux", "capture-pane", "-t", q.pane_id, "-p", "-e", "-N",
-        "-S", start_arg, "-E", end_arg,
+        "-M", "-S", start_arg, "-E", end_arg,
     }, 1024 * 1024);
 }
 
@@ -262,5 +262,3 @@ test "jumpKind" {
     try std.testing.expectEqual(JumpKind.move, jumpKind(true, false));
     try std.testing.expectEqual(JumpKind.extend, jumpKind(true, true));
 }
-
-

@@ -13,7 +13,7 @@ session="flash-tmux-test"
 trap '"$tmux_bin" -L "$socket" kill-server 2>/dev/null || true' EXIT
 
 "$tmux_bin" -L "$socket" -f /dev/null new-session -d -x 80 -y 12 -s "$session" \
-    /bin/sh -c 'i=1; while [ "$i" -le 120 ]; do printf "FLASH-MARKER-%03d\n" "$i"; i=$((i + 1)); done; exec cat'
+    /bin/sh -c 'i=1; while [ "$i" -le 120 ]; do printf "FLASH-MARKER-%03d\n" "$i"; i=$((i + 1)); done; (sleep 0.25; i=1; while :; do printf "FLASH-NOISE-%06d\n" "$i"; i=$((i + 1)); sleep 0.01; done) & exec cat'
 pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
 socket_path=$("$tmux_bin" -L "$socket" display-message -p '#{socket_path}')
 
@@ -34,9 +34,22 @@ probe() {
     printf 'ok %s: %s\n' "$name" "$marker"
 }
 
+assert_cursor_row() {
+    local marker=$1 out
+    out=$(TMUX="$socket_path,0,0" "$bin" --inspect --pane="$pane")
+    grep -qx 'in_mode=true' <<<"$out"
+    grep -qx 'copy_cursor=0,0' <<<"$out"
+    grep -A 1 '^--- capture ---$' <<<"$out" | grep -q "^$marker"
+}
+
 "$tmux_bin" -L "$socket" copy-mode -t "$pane"
 "$tmux_bin" -L "$socket" send-keys -t "$pane" -X history-top
 probe top FLASH-MARKER-001
+
+for _ in {1..100}; do
+    assert_cursor_row FLASH-MARKER-001
+done
+printf 'ok copy-mode capture remains aligned during output\n'
 
 "$tmux_bin" -L "$socket" send-keys -t "$pane" -X goto-line 60
 probe middle FLASH-MARKER-060
