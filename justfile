@@ -22,3 +22,16 @@ tmux-test: build
 
 tmux-sandbox: build
     ./tests/tmux-sandbox.sh --interactive "{{bin}}"
+
+release-build:
+    mkdir -p dist
+    zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-musl
+    cp zig-out/bin/flash_tmux dist/flash_tmux-linux-x86_64
+    zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-linux-musl
+    cp zig-out/bin/flash_tmux dist/flash_tmux-linux-aarch64
+    zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos
+    cp zig-out/bin/flash_tmux dist/flash_tmux-macos-x86_64
+    zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos
+    cp zig-out/bin/flash_tmux dist/flash_tmux-macos-aarch64
+    zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+    cp zig-out/bin/flash_tmux dist/flash_tmux-freebsd-x86_64

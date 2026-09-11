@@ -47,6 +47,65 @@ key=$(get_option "@flash-key" "s")
 copy_key=$(get_option "@flash-copy-key" "s")
 log "keys prefix=$key copy=$copy_key"
 
+release_asset() {
+    os=$(uname -s) || return 1
+    arch=$(uname -m) || return 1
+    case "$os" in
+        Linux) os=linux ;;
+        Darwin) os=macos ;;
+        FreeBSD) os=freebsd ;;
+        *) return 1 ;;
+    esac
+    case "$arch" in
+        x86_64|amd64) arch=x86_64 ;;
+        aarch64|arm64) arch=aarch64 ;;
+        *) return 1 ;;
+    esac
+    if [ "$os" = freebsd ] && [ "$arch" != x86_64 ]; then
+        return 1
+    fi
+    printf '%s\n' "flash_tmux-${os}-${arch}"
+}
+
+fetch_release() {
+    asset=$(release_asset) || return 1
+    url="https://github.com/and-rs/flash.tmux/releases/latest/download/$asset"
+    log "fetch $url"
+    mkdir -p "$DIR/zig-out/bin" || return 1
+    tmp="$BIN.$$"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "$tmp" "$url" || {
+            rm -f "$tmp"
+            return 1
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$tmp" "$url" || {
+            rm -f "$tmp"
+            return 1
+        }
+    else
+        log "no curl/wget"
+        return 1
+    fi
+    if [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        return 1
+    fi
+    chmod +x "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    mv "$tmp" "$BIN" || {
+        rm -f "$tmp"
+        return 1
+    }
+    log "fetched $asset"
+}
+
+if [ ! -x "$BIN" ]; then
+    fetch_release || true
+fi
+
 if [ ! -x "$BIN" ]; then
     log "building"
     if ! command -v zig >/dev/null 2>&1; then

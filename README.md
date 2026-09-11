@@ -10,7 +10,7 @@ TPM:
 set -g @plugin 'and-rs/flash.tmux'
 ```
 
-Or `tmux run-shell /path/to/flash.tmux`. Builds the binary on first load if missing.
+Or `tmux run-shell /path/to/flash.tmux`. Fetches the latest release binary on first load; Zig is only used if that fails.
 
 ## Keys
 
@@ -29,4 +29,5 @@ just test
 just build
 just visual      # inside tmux
 just tmux-test
+just release-build
 ```

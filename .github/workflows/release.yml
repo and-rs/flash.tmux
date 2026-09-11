@@ -1,0 +1,33 @@
+name: release
+on:
+  push:
+    tags:
+      - "v*"
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+      - run: zig build test
+      - name: Build release assets
+        run: |
+          set -e
+          mkdir -p dist
+          build() {
+            zig build -Doptimize=ReleaseSafe -Dtarget="$1"
+            cp zig-out/bin/flash_tmux "dist/flash_tmux-$2"
+          }
+          build x86_64-linux-musl linux-x86_64
+          build aarch64-linux-musl linux-aarch64
+          build x86_64-macos macos-x86_64
+          build aarch64-macos macos-aarch64
+          build x86_64-freebsd freebsd-x86_64
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/flash_tmux-*
+          generate_release_notes: true
