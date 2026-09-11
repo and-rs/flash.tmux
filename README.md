@@ -4,8 +4,6 @@ Leap around a tmux pane like flash.nvim. Zig 0.16.
 
 ## Install
 
-TPM:
-
 ```tmux
 set -g @plugin 'and-rs/flash.tmux'
 ```
@@ -18,13 +16,14 @@ For local development, use the development entry point instead. It always builds
 run-shell '/path/to/flash.dev.tmux'
 ```
 
-## Keys
+## Config
 
-|              | default                 |
-| ------------ | ----------------------- |
-| prefix       | `s` (`@flash-key`)      |
-| copy-mode-vi | `s` (`@flash-copy-key`) |
-| debug        | off (`@flash-debug`)    |
+```tmux
+# Optional overrides
+set -g @flash-key 's'
+set -g @flash-copy-key 's'
+set -g @flash-debug 'off'
+```
 
 Type a pattern, then a label. Esc aborts. Enter jumps the nearest match. `@flash-debug` `1`/`on`/`true`/`yes` logs to `/tmp/flash.tmux.log`.
 

@@ -36,3 +36,7 @@ release-build:
     zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
     cp zig-out/bin/flash_tmux dist/flash_tmux-freebsd-x86_64
     (cd dist && sha256sum flash_tmux-* > SHA256SUMS)
+
+release version:
+    git tag -a "{{version}}" -m "{{version}}"
+    git push origin "{{version}}"
