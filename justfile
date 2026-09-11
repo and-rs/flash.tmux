@@ -27,5 +27,10 @@ release:
     #!/usr/bin/env sh
     set -eu
     version=$(tr -d ' \t\r\n' < VERSION)
+    head_version=$(git show HEAD:VERSION 2>/dev/null | tr -d ' \t\r\n')
+    if [ "$version" != "$head_version" ]; then
+        printf 'VERSION is not committed at HEAD\n' >&2
+        exit 1
+    fi
     git tag -a "$version" -m "$version"
     git push origin "$version"
