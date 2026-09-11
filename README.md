@@ -10,7 +10,13 @@ TPM:
 set -g @plugin 'and-rs/flash.tmux'
 ```
 
-Or `tmux run-shell /path/to/flash.tmux`. Fetches the latest release binary on first load; Zig is only used if that fails.
+Or `tmux run-shell /path/to/flash.tmux`. Fetches the latest release binary on first load and checks its SHA-256; Zig is used if that fails. Without Zig, tmux reports the failure and required next step.
+
+For local development, use the development entry point instead. It always builds the checkout with Zig and never fetches a release:
+
+```tmux
+run-shell '/path/to/flash.dev.tmux'
+```
 
 ## Keys
 

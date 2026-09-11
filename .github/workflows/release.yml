@@ -27,7 +27,8 @@ jobs:
           build x86_64-macos macos-x86_64
           build aarch64-macos macos-aarch64
           build x86_64-freebsd freebsd-x86_64
+          (cd dist && sha256sum flash_tmux-* > SHA256SUMS)
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/flash_tmux-*
+          files: dist/*
           generate_release_notes: true

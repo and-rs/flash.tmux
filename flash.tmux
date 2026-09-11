@@ -67,28 +67,54 @@ release_asset() {
     printf '%s\n' "flash_tmux-${os}-${arch}"
 }
 
-fetch_release() {
-    asset=$(release_asset) || return 1
-    url="https://github.com/and-rs/flash.tmux/releases/latest/download/$asset"
-    log "fetch $url"
-    mkdir -p "$DIR/zig-out/bin" || return 1
-    tmp="$BIN.$$"
+download() {
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "$tmp" "$url" || {
-            rm -f "$tmp"
-            return 1
-        }
+        curl -fsSL -o "$2" "$1"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$tmp" "$url" || {
-            rm -f "$tmp"
-            return 1
-        }
+        wget -q -O "$2" "$1"
     else
         log "no curl/wget"
         return 1
     fi
-    if [ ! -s "$tmp" ]; then
+}
+
+file_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v sha256 >/dev/null 2>&1; then
+        sha256 -q "$1"
+    else
+        log "no sha256"
+        return 1
+    fi
+}
+
+fetch_release() {
+    asset=$(release_asset) || return 1
+    base="https://github.com/and-rs/flash.tmux/releases/latest/download"
+    log "fetch $base/$asset"
+    mkdir -p "$DIR/zig-out/bin" || return 1
+    tmp="$BIN.$$"
+    sums="$tmp.sums"
+    if ! download "$base/SHA256SUMS" "$sums" || ! download "$base/$asset" "$tmp"; then
+        rm -f "$tmp" "$sums"
+        return 1
+    fi
+    if [ ! -s "$tmp" ] || [ ! -s "$sums" ]; then
+        rm -f "$tmp" "$sums"
+        return 1
+    fi
+    want=$(awk -v a="$asset" '$2 == a { print $1; exit }' "$sums")
+    got=$(file_sha256 "$tmp") || {
+        rm -f "$tmp" "$sums"
+        return 1
+    }
+    rm -f "$sums"
+    if [ -z "$want" ] || [ -z "$got" ] || [ "$want" != "$got" ]; then
         rm -f "$tmp"
+        say "checksum mismatch"
         return 1
     fi
     chmod +x "$tmp" || {
@@ -99,17 +125,31 @@ fetch_release() {
         rm -f "$tmp"
         return 1
     }
-    log "fetched $asset"
+    log "fetched latest $asset"
 }
 
-if [ ! -x "$BIN" ]; then
-    fetch_release || true
+needs_build=0
+if [ "${FLASH_TMUX_DEV:-0}" -eq 1 ]; then
+    needs_build=1
+elif [ ! -x "$BIN" ]; then
+    if ! fetch_release; then
+        log "release fetch or checksum verification failed"
+        release_failed=1
+    fi
 fi
 
 if [ ! -x "$BIN" ]; then
-    log "building"
+    needs_build=1
+fi
+
+if [ "$needs_build" -eq 1 ]; then
+    log "building local checkout"
     if ! command -v zig >/dev/null 2>&1; then
-        say "zig not on PATH"
+        if [ "${release_failed:-0}" -eq 1 ]; then
+            say "release unavailable; install Zig 0.16"
+        else
+            say "zig 0.16 not on PATH"
+        fi
         exit 0
     fi
     if ! (cd "$DIR" && zig build) >>"$LOG" 2>&1; then
