@@ -56,3 +56,7 @@ Different job (hint-to-copy or easymotion):
 - [Kristijan/flash-copy.tmux](https://github.com/Kristijan/flash-copy.tmux) — search words, copy/range to clipboard
 - [tmux-fingers](https://github.com/Morantron/tmux-fingers), [tmux-thumbs](https://github.com/fcsonline/tmux-thumbs), [tmux-fastcopy](https://github.com/abhinav/tmux-fastcopy) — regex hints (URLs, SHAs, paths) then copy
 - [schasse/tmux-jump](https://github.com/schasse/tmux-jump), [easyjump.tmux](https://github.com/roy2220/easyjump.tmux), [tmux-easy-motion](https://github.com/IngoMeyer441/tmux-easy-motion) — 1–2 char easymotion/leap, not flash incremental search
+
+## Some development considerations:
+
+1. I like the tests separated from the source files.

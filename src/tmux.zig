@@ -85,8 +85,8 @@ pub fn capture(allocator: std.mem.Allocator, io: Io, q: PaneQuery) ![]u8 {
     const start_arg = std.fmt.bufPrint(&start_buf, "{d}", .{start}) catch unreachable;
     const end_arg = std.fmt.bufPrint(&end_buf, "{d}", .{end}) catch unreachable;
     return run(allocator, io, &.{
-        "tmux", "capture-pane", "-t", q.pane_id, "-p", "-e", "-N",
-        "-M", "-S", start_arg, "-E", end_arg,
+        "tmux", "capture-pane", "-t",      q.pane_id, "-p",    "-e", "-N",
+        "-M",   "-S",           start_arg, "-E",      end_arg,
     }, 1024 * 1024);
 }
 
@@ -121,7 +121,7 @@ pub fn jump(
         .extend => {
             if (!still_in_mode) {
                 try enterAt(allocator, io, pane_id, snap.copy_cursor_y, from, snap.scroll_position);
-                try sendX(allocator, io, pane_id, &.{ "begin-selection" });
+                try sendX(allocator, io, pane_id, &.{"begin-selection"});
             }
             try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, to);
         },
@@ -136,8 +136,8 @@ fn lineAt(lines: []const []const u8, row: u32) []const u8 {
 fn enterAt(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
     _ = try run(allocator, io, &.{ "tmux", "copy-mode", "-t", pane_id }, 64);
     try moveN(allocator, io, pane_id, scroll, "scroll-up");
-    try sendX(allocator, io, pane_id, &.{ "top-line" });
-    try sendX(allocator, io, pane_id, &.{ "start-of-line" });
+    try sendX(allocator, io, pane_id, &.{"top-line"});
+    try sendX(allocator, io, pane_id, &.{"start-of-line"});
     try moveN(allocator, io, pane_id, row, "cursor-down");
     try gotoCol(allocator, io, pane_id, col);
 }
@@ -156,7 +156,7 @@ fn moveDelta(
 }
 
 fn gotoCol(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, col: u32) !void {
-    try sendX(allocator, io, pane_id, &.{ "start-of-line" });
+    try sendX(allocator, io, pane_id, &.{"start-of-line"});
     try moveN(allocator, io, pane_id, col, "cursor-right");
 }
 
@@ -219,46 +219,4 @@ fn run(allocator: std.mem.Allocator, io: Io, argv: []const []const u8, stdout_li
         else => return error.TmuxFailed,
     }
     return result.stdout;
-}
-
-test "parse query" {
-    const q = try parseQuery("%2|118|31|1|26|0|||0\n");
-    try std.testing.expectEqualStrings("%2", q.pane_id);
-    try std.testing.expectEqual(@as(u32, 118), q.width);
-    try std.testing.expectEqual(@as(u32, 31), q.height);
-    try std.testing.expectEqual(@as(u32, 1), q.cursor_x);
-    try std.testing.expectEqual(@as(u32, 26), q.cursor_y);
-    try std.testing.expectEqual(false, q.in_mode);
-    try std.testing.expectEqual(@as(u32, 0), q.copy_cursor_x);
-    try std.testing.expectEqual(@as(u32, 0), q.copy_cursor_y);
-    try std.testing.expectEqual(false, q.selection_present);
-}
-
-test "parse query trailing empty fields" {
-    const q = try parseQuery("%0|121|31|1|26|0|||\n");
-    try std.testing.expectEqualStrings("%0", q.pane_id);
-    try std.testing.expectEqual(@as(u32, 121), q.width);
-    try std.testing.expectEqual(false, q.in_mode);
-    try std.testing.expectEqual(false, q.selection_present);
-}
-
-test "parse query in copy mode" {
-    const q = try parseQuery("%0|80|24|0|0|1|12|7|1");
-    try std.testing.expectEqual(true, q.in_mode);
-    try std.testing.expectEqual(@as(u32, 12), q.copy_cursor_x);
-    try std.testing.expectEqual(@as(u32, 7), q.copy_cursor_y);
-    try std.testing.expectEqual(true, q.selection_present);
-    try std.testing.expectEqual(@as(u32, 0), q.scroll_position);
-}
-
-test "parse query scroll" {
-    const q = try parseQuery("%0|80|24|0|0|1|12|7|0|15");
-    try std.testing.expectEqual(@as(u32, 15), q.scroll_position);
-}
-
-test "jumpKind" {
-    try std.testing.expectEqual(JumpKind.enter, jumpKind(false, false));
-    try std.testing.expectEqual(JumpKind.enter, jumpKind(false, true));
-    try std.testing.expectEqual(JumpKind.move, jumpKind(true, false));
-    try std.testing.expectEqual(JumpKind.extend, jumpKind(true, true));
 }
