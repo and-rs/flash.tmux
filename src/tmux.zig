@@ -17,10 +17,6 @@ pub const PaneQuery = struct {
     scroll_position: u32,
 };
 
-pub fn swapPanes(allocator: std.mem.Allocator, io: Io, a: []const u8, b: []const u8) !void {
-    _ = try run(allocator, io, &.{ "tmux", "swap-pane", "-s", a, "-t", b }, 64);
-}
-
 pub fn killSession(allocator: std.mem.Allocator, io: Io, session: []const u8) void {
     _ = run(allocator, io, &.{ "tmux", "kill-session", "-t", session }, 64) catch {};
 }
@@ -53,9 +49,14 @@ pub fn hasSession(allocator: std.mem.Allocator, io: Io, session: []const u8) boo
 
 pub const overlay_option = "@flash-overlay";
 
-pub fn setOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8, session: []const u8, source: []const u8) !void {
+pub fn showOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8, session: []const u8, source: []const u8) !void {
     const value = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ session, source });
-    _ = try run(allocator, io, &.{ "tmux", "set-option", "-p", "-t", pane, overlay_option, value }, 64);
+    var commands = Sequence.init(allocator);
+    defer commands.deinit();
+    try commands.add(&.{ "set-option", "-p", "-t", pane, "remain-on-exit", "on" });
+    try commands.add(&.{ "set-option", "-p", "-t", pane, overlay_option, value });
+    try commands.add(&.{ "swap-pane", "-s", pane, "-t", source });
+    _ = try commands.execute(io, 64);
 }
 
 pub fn getOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8) ![]u8 {
@@ -66,25 +67,43 @@ pub fn clearOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8) void
     _ = run(allocator, io, &.{ "tmux", "set-option", "-pu", "-t", pane, overlay_option }, 64) catch {};
 }
 
-pub fn setRemainOnExit(allocator: std.mem.Allocator, io: Io, pane: []const u8) !void {
-    _ = try run(allocator, io, &.{ "tmux", "set-option", "-p", "-t", pane, "remain-on-exit", "on" }, 64);
-}
-
 pub fn paneDead(allocator: std.mem.Allocator, io: Io, pane: []const u8) bool {
     const raw = run(allocator, io, &.{ "tmux", "display-message", "-t", pane, "-p", "#{pane_dead}" }, 64) catch return false;
     return std.mem.eql(u8, std.mem.trim(u8, raw, " \t\r\n"), "1");
 }
 
-pub fn copyMode(allocator: std.mem.Allocator, io: Io, pane: []const u8) !void {
-    _ = try run(allocator, io, &.{ "tmux", "copy-mode", "-t", pane }, 64);
+pub fn freeze(allocator: std.mem.Allocator, io: Io, pane: []const u8, enter_copy_mode: bool) !PaneQuery {
+    var commands = Sequence.init(allocator);
+    defer commands.deinit();
+    if (enter_copy_mode) try commands.add(&.{ "copy-mode", "-t", pane });
+    try appendSendX(&commands, pane, &.{"refresh-off"});
+    try commands.add(&.{ "display-message", "-t", pane, "-p", query_format });
+    return parseQuery(try commands.execute(io, 4096));
 }
 
-pub fn cancelCopyMode(allocator: std.mem.Allocator, io: Io, pane: []const u8) void {
-    _ = run(allocator, io, &.{ "tmux", "copy-mode", "-q", "-t", pane }, 64) catch {};
+pub fn restoreOverlay(
+    allocator: std.mem.Allocator,
+    io: Io,
+    pane: []const u8,
+    source: []const u8,
+    session: []const u8,
+    cancel_copy_mode: bool,
+) !void {
+    var commands = Sequence.init(allocator);
+    defer commands.deinit();
+    if (cancel_copy_mode) try commands.add(&.{ "copy-mode", "-q", "-t", source });
+    try commands.add(&.{ "swap-pane", "-s", pane, "-t", source });
+    try commands.add(&.{ "kill-session", "-t", session });
+    _ = try commands.execute(io, 64);
 }
 
-pub fn refreshOff(allocator: std.mem.Allocator, io: Io, pane: []const u8) !void {
-    _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane, "-X", "refresh-off" }, 64);
+pub fn recoverOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8, source: []const u8, session: []const u8) !void {
+    var commands = Sequence.init(allocator);
+    defer commands.deinit();
+    try commands.add(&.{ "swap-pane", "-s", pane, "-t", source });
+    try commands.add(&.{ "set-option", "-pu", "-t", pane, overlay_option });
+    try commands.add(&.{ "kill-session", "-t", session });
+    _ = try commands.execute(io, 64);
 }
 
 pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {
@@ -130,24 +149,27 @@ pub fn jump(
     still_in_mode: bool,
     lines: []const []const u8,
 ) !void {
+    var commands = Sequence.init(allocator);
+    defer commands.deinit();
     const to = flash.cursorRights(lineAt(lines, row), col);
     const from = flash.cursorRights(lineAt(lines, snap.copy_cursor_y), snap.copy_cursor_x);
     switch (jumpKind(snap.in_mode, snap.selection_present)) {
-        .enter => try enterAt(allocator, io, pane_id, row, to, 0),
+        .enter => try appendEnterAt(&commands, allocator, pane_id, row, to, 0),
         .move => {
             if (!still_in_mode) {
-                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, from, snap.scroll_position);
+                try appendEnterAt(&commands, allocator, pane_id, snap.copy_cursor_y, from, snap.scroll_position);
             }
-            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, to);
+            try appendMoveDelta(&commands, allocator, pane_id, snap.copy_cursor_y, row, to);
         },
         .extend => {
             if (!still_in_mode) {
-                try enterAt(allocator, io, pane_id, snap.copy_cursor_y, from, snap.scroll_position);
-                try sendX(allocator, io, pane_id, &.{"begin-selection"});
+                try appendEnterAt(&commands, allocator, pane_id, snap.copy_cursor_y, from, snap.scroll_position);
+                try appendSendX(&commands, pane_id, &.{"begin-selection"});
             }
-            try moveDelta(allocator, io, pane_id, snap.copy_cursor_y, row, to);
+            try appendMoveDelta(&commands, allocator, pane_id, snap.copy_cursor_y, row, to);
         },
     }
+    _ = try commands.execute(io, 64);
 }
 
 fn lineAt(lines: []const []const u8, row: u32) []const u8 {
@@ -155,44 +177,41 @@ fn lineAt(lines: []const []const u8, row: u32) []const u8 {
     return lines[row];
 }
 
-fn enterAt(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
-    _ = try run(allocator, io, &.{ "tmux", "copy-mode", "-t", pane_id }, 64);
-    try moveN(allocator, io, pane_id, scroll, "scroll-up");
-    try sendX(allocator, io, pane_id, &.{"top-line"});
-    try sendX(allocator, io, pane_id, &.{"start-of-line"});
-    try moveN(allocator, io, pane_id, row, "cursor-down");
-    try gotoCol(allocator, io, pane_id, col);
+fn appendEnterAt(commands: *Sequence, allocator: std.mem.Allocator, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
+    try commands.add(&.{ "copy-mode", "-t", pane_id });
+    try appendMoveN(commands, allocator, pane_id, scroll, "scroll-up");
+    try appendSendX(commands, pane_id, &.{"top-line"});
+    try appendSendX(commands, pane_id, &.{"start-of-line"});
+    try appendMoveN(commands, allocator, pane_id, row, "cursor-down");
+    try appendGotoCol(commands, allocator, pane_id, col);
 }
 
-fn moveDelta(
+fn appendMoveDelta(
+    commands: *Sequence,
     allocator: std.mem.Allocator,
-    io: Io,
     pane_id: []const u8,
     from_row: u32,
     to_row: u32,
     to_col: u32,
 ) !void {
-    if (to_row > from_row) try moveN(allocator, io, pane_id, to_row - from_row, "cursor-down");
-    if (to_row < from_row) try moveN(allocator, io, pane_id, from_row - to_row, "cursor-up");
-    try gotoCol(allocator, io, pane_id, to_col);
+    if (to_row > from_row) try appendMoveN(commands, allocator, pane_id, to_row - from_row, "cursor-down");
+    if (to_row < from_row) try appendMoveN(commands, allocator, pane_id, from_row - to_row, "cursor-up");
+    try appendGotoCol(commands, allocator, pane_id, to_col);
 }
 
-fn gotoCol(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, col: u32) !void {
-    try sendX(allocator, io, pane_id, &.{"start-of-line"});
-    try moveN(allocator, io, pane_id, col, "cursor-right");
+fn appendGotoCol(commands: *Sequence, allocator: std.mem.Allocator, pane_id: []const u8, col: u32) !void {
+    try appendSendX(commands, pane_id, &.{"start-of-line"});
+    try appendMoveN(commands, allocator, pane_id, col, "cursor-right");
 }
 
-fn moveN(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, n: u32, motion: []const u8) !void {
+fn appendMoveN(commands: *Sequence, allocator: std.mem.Allocator, pane_id: []const u8, n: u32, motion: []const u8) !void {
     if (n == 0) return;
     const count = try std.fmt.allocPrint(allocator, "{d}", .{n});
-    try sendX(allocator, io, pane_id, &.{ "-N", count, motion });
+    try appendSendX(commands, pane_id, &.{ "-N", count, motion });
 }
 
-fn sendX(allocator: std.mem.Allocator, io: Io, pane_id: []const u8, extra: []const []const u8) !void {
-    var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(allocator, &.{ "tmux", "send-keys", "-t", pane_id, "-X" });
-    try argv.appendSlice(allocator, extra);
-    _ = try run(allocator, io, argv.items, 64);
+fn appendSendX(commands: *Sequence, pane_id: []const u8, extra: []const []const u8) !void {
+    try commands.addParts(&.{ "send-keys", "-t", pane_id, "-X" }, extra);
 }
 
 pub fn parseQuery(raw: []const u8) !PaneQuery {
@@ -229,6 +248,37 @@ fn parseU32(s: []const u8) !u32 {
     if (s.len == 0) return 0;
     return std.fmt.parseUnsigned(u32, s, 10);
 }
+
+const Sequence = struct {
+    allocator: std.mem.Allocator,
+    argv: std.ArrayList([]const u8) = .empty,
+
+    fn init(allocator: std.mem.Allocator) Sequence {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *Sequence) void {
+        self.argv.deinit(self.allocator);
+    }
+
+    fn add(self: *Sequence, args: []const []const u8) !void {
+        try self.addParts(args, &.{});
+    }
+
+    fn addParts(self: *Sequence, first: []const []const u8, second: []const []const u8) !void {
+        if (self.argv.items.len == 0) {
+            try self.argv.append(self.allocator, "tmux");
+        } else {
+            try self.argv.append(self.allocator, ";");
+        }
+        try self.argv.appendSlice(self.allocator, first);
+        try self.argv.appendSlice(self.allocator, second);
+    }
+
+    fn execute(self: *Sequence, io: Io, stdout_limit: usize) ![]u8 {
+        return run(self.allocator, io, self.argv.items, stdout_limit);
+    }
+};
 
 fn run(allocator: std.mem.Allocator, io: Io, argv: []const []const u8, stdout_limit: usize) ![]u8 {
     const result = try std.process.run(allocator, io, .{

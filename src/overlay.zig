@@ -16,9 +16,7 @@ pub fn launch(init: std.process.Init, pane: ?[]const u8) !LaunchResult {
         } else if (!tmux.paneDead(allocator, init.io, query.pane_id)) {
             return .already_active;
         } else {
-            try tmux.swapPanes(allocator, init.io, query.pane_id, ref.source);
-            tmux.clearOverlay(allocator, init.io, query.pane_id);
-            tmux.killSession(allocator, init.io, ref.session);
+            try tmux.recoverOverlay(allocator, init.io, query.pane_id, ref.source, ref.session);
             return .recovered;
         }
     }
@@ -67,22 +65,17 @@ const Overlay = struct {
 
     fn show(self: *Overlay) !void {
         const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return error.MissingOverlayPane;
-        try tmux.setRemainOnExit(self.init.arena.allocator(), self.init.io, pane);
-        try tmux.setOverlay(self.init.arena.allocator(), self.init.io, pane, self.session, self.source);
-        errdefer tmux.clearOverlay(self.init.arena.allocator(), self.init.io, pane);
-        try tmux.swapPanes(self.init.arena.allocator(), self.init.io, pane, self.source);
+        try tmux.showOverlay(self.init.arena.allocator(), self.init.io, pane, self.session, self.source);
         self.shown = true;
     }
 
     fn freeze(self: *Overlay) !tmux.PaneQuery {
-        var snapshot = try tmux.query(self.init.arena.allocator(), self.init.io, self.source);
-        if (!snapshot.in_mode) {
+        const before = try tmux.query(self.init.arena.allocator(), self.init.io, self.source);
+        if (!before.in_mode) {
             self.owns_copy_mode = true;
-            try tmux.copyMode(self.init.arena.allocator(), self.init.io, self.source);
-            snapshot = try tmux.query(self.init.arena.allocator(), self.init.io, self.source);
-            if (!snapshot.in_mode) return error.CopyModeNotEntered;
         }
-        try tmux.refreshOff(self.init.arena.allocator(), self.init.io, self.source);
+        const snapshot = try tmux.freeze(self.init.arena.allocator(), self.init.io, self.source, !before.in_mode);
+        if (!snapshot.in_mode) return error.CopyModeNotEntered;
         return snapshot;
     }
 
@@ -93,12 +86,17 @@ const Overlay = struct {
     }
 
     fn close(self: *Overlay) void {
-        if (self.owns_copy_mode and !self.committed) {
-            tmux.cancelCopyMode(self.init.arena.allocator(), self.init.io, self.source);
-        }
         if (self.shown) {
             const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return;
-            tmux.swapPanes(self.init.arena.allocator(), self.init.io, pane, self.source) catch return;
+            tmux.restoreOverlay(
+                self.init.arena.allocator(),
+                self.init.io,
+                pane,
+                self.source,
+                self.session,
+                self.owns_copy_mode and !self.committed,
+            ) catch return;
+            return;
         }
         tmux.killSession(self.init.arena.allocator(), self.init.io, self.session);
     }
