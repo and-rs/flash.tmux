@@ -22,6 +22,17 @@ test "parse query trailing empty fields" {
     try std.testing.expectEqual(false, q.selection_present);
 }
 
+test "parse query ignores surrounding output whitespace" {
+    const q = try tmux.parseQuery(" \n %1|80|24|3|4|1|5|6|1|7\nignored\n");
+    try std.testing.expectEqualStrings("%1", q.pane_id);
+    try std.testing.expectEqual(@as(u32, 7), q.scroll_position);
+}
+
+test "parse query rejects an incomplete snapshot" {
+    try std.testing.expectError(error.InvalidQuery, tmux.parseQuery("%0|80|24|0|0"));
+    try std.testing.expectError(error.InvalidQuery, tmux.parseQuery("|80|24|0|0|0"));
+}
+
 test "parse query in copy mode" {
     const q = try tmux.parseQuery("%0|80|24|0|0|1|12|7|1");
     try std.testing.expectEqual(true, q.in_mode);

@@ -34,8 +34,9 @@ pub fn main(init: std.process.Init) !void {
 
 fn inspect(init: std.process.Init, opts: cli.Args) !void {
     const arena = init.arena.allocator();
-    const q = try tmux.query(arena, init.io, opts.pane);
-    const raw = try tmux.capture(arena, init.io, q);
+    const client = tmux.Client.init(arena, init.io);
+    const q = try client.query(opts.pane);
+    const raw = try client.capture(q);
     try printSnapshot(init.io, q, raw);
 }
 
@@ -65,7 +66,7 @@ fn printVersion(init: std.process.Init) !void {
     try w.flush();
 }
 
-fn printSnapshot(io: std.Io, q: tmux.PaneQuery, text: []const u8) !void {
+fn printSnapshot(io: std.Io, q: tmux.PaneSnapshot, text: []const u8) !void {
     var out_buf: [1024]u8 = undefined;
     var writer = std.Io.File.Writer.init(.stdout(), io, &out_buf);
     const w = &writer.interface;

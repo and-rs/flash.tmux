@@ -8,15 +8,16 @@ pub const LaunchResult = enum { started, already_active, recovered };
 
 pub fn launch(init: std.process.Init, pane: ?[]const u8) !LaunchResult {
     const allocator = init.arena.allocator();
-    const query = try tmux.query(allocator, init.io, pane);
+    const client = tmux.Client.init(allocator, init.io);
+    const query = try client.query(pane);
 
-    if (parseRef(tmux.getOverlay(allocator, init.io, query.pane_id) catch "")) |ref| {
-        if (!tmux.hasSession(allocator, init.io, ref.session)) {
-            tmux.clearOverlay(allocator, init.io, query.pane_id);
-        } else if (!tmux.paneDead(allocator, init.io, query.pane_id)) {
+    if (parseRef(client.overlayReference(query.pane_id) catch "")) |ref| {
+        if (!client.hasSession(ref.session)) {
+            client.clearOverlay(query.pane_id);
+        } else if (!client.paneDead(query.pane_id)) {
             return .already_active;
         } else {
-            try tmux.recoverOverlay(allocator, init.io, query.pane_id, ref.source, ref.session);
+            try client.recoverOverlay(query.pane_id, ref.source, ref.session);
             return .recovered;
         }
     }
@@ -24,7 +25,7 @@ pub fn launch(init: std.process.Init, pane: ?[]const u8) !LaunchResult {
     const bin = try std.process.executablePathAlloc(init.io, allocator);
     const suffix = std.mem.trimStart(u8, query.pane_id, "%");
     const session = try std.fmt.allocPrint(allocator, "flash-overlay-{s}", .{suffix});
-    return startReplica(allocator, init.io, bin, query, session);
+    return startReplica(client, bin, query, session);
 }
 
 pub fn run(init: std.process.Init, source: []const u8, session: []const u8) !void {
@@ -35,12 +36,13 @@ pub fn run(init: std.process.Init, source: []const u8, session: []const u8) !voi
     defer screen.close();
 
     const allocator = init.arena.allocator();
-    const warm = try tmux.query(allocator, init.io, source);
-    try screen.showWarmFrame(try tmux.capture(allocator, init.io, warm), cursorOf(warm));
+    const client = tmux.Client.init(allocator, init.io);
+    const warm = try client.query(source);
+    try screen.showWarmFrame(try client.capture(warm), cursorOf(warm));
     try overlay.show();
 
     const snapshot = try overlay.freeze();
-    const raw = try tmux.capture(allocator, init.io, snapshot);
+    const raw = try client.capture(snapshot);
     const plain = try sgr.strip(allocator, raw);
     const lines = try splitLines(allocator, plain);
     const dim = try sgr.dim(allocator, raw);
@@ -65,32 +67,36 @@ const Overlay = struct {
 
     fn show(self: *Overlay) !void {
         const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return error.MissingOverlayPane;
-        try tmux.showOverlay(self.init.arena.allocator(), self.init.io, pane, self.session, self.source);
+        try self.client().showOverlay(pane, self.session, self.source);
         self.shown = true;
     }
 
-    fn freeze(self: *Overlay) !tmux.PaneQuery {
-        const before = try tmux.query(self.init.arena.allocator(), self.init.io, self.source);
+    fn freeze(self: *Overlay) !tmux.PaneSnapshot {
+        const before = try self.client().query(self.source);
         if (!before.in_mode) {
             self.owns_copy_mode = true;
         }
-        const snapshot = try tmux.freeze(self.init.arena.allocator(), self.init.io, self.source, !before.in_mode);
+        const snapshot = try self.client().freeze(self.source, !before.in_mode);
         if (!snapshot.in_mode) return error.CopyModeNotEntered;
         return snapshot;
     }
 
-    fn commit(self: *Overlay, match: flash.Match, snapshot: tmux.PaneQuery, lines: []const []const u8) !void {
-        const now = try tmux.query(self.init.arena.allocator(), self.init.io, snapshot.pane_id);
-        try tmux.jump(self.init.arena.allocator(), self.init.io, snapshot.pane_id, match.pos.row, match.pos.col, snapshot, now.in_mode, lines);
+    fn commit(self: *Overlay, match: flash.Match, snapshot: tmux.PaneSnapshot, lines: []const []const u8) !void {
+        const tmux_client = self.client();
+        const now = try tmux_client.query(snapshot.pane_id);
+        try tmux_client.jump(.{
+            .snapshot = snapshot,
+            .target_row = match.pos.row,
+            .target_col = match.pos.col,
+            .still_in_mode = now.in_mode,
+        }, lines);
         self.committed = true;
     }
 
     fn close(self: *Overlay) void {
         if (self.shown) {
             const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return;
-            tmux.restoreOverlay(
-                self.init.arena.allocator(),
-                self.init.io,
+            self.client().restoreOverlay(
                 pane,
                 self.source,
                 self.session,
@@ -98,7 +104,11 @@ const Overlay = struct {
             ) catch return;
             return;
         }
-        tmux.killSession(self.init.arena.allocator(), self.init.io, self.session);
+        self.client().killSession(self.session);
+    }
+
+    fn client(self: *const Overlay) tmux.Client {
+        return .init(self.init.arena.allocator(), self.init.io);
     }
 };
 
@@ -111,20 +121,20 @@ fn parseRef(raw: []const u8) ?Ref {
     return .{ .session = value[0..sep], .source = value[sep + 1 ..] };
 }
 
-fn startReplica(allocator: std.mem.Allocator, io: std.Io, bin: []const u8, query: tmux.PaneQuery, session: []const u8) !LaunchResult {
-    if (tmux.hasSession(allocator, io, session)) {
-        if (!tmux.paneDead(allocator, io, session)) return .already_active;
-        tmux.killSession(allocator, io, session);
+fn startReplica(client: tmux.Client, bin: []const u8, query: tmux.PaneSnapshot, session: []const u8) !LaunchResult {
+    if (client.hasSession(session)) {
+        if (!client.paneDead(session)) return .already_active;
+        client.killSession(session);
     }
 
-    tmux.launchOverlay(allocator, io, bin, query.pane_id, query.width, query.height, session) catch |err| {
-        tmux.killSession(allocator, io, session);
+    client.launchOverlay(bin, query.pane_id, query.width, query.height, session) catch |err| {
+        client.killSession(session);
         return err;
     };
     return .started;
 }
 
-fn cursorOf(query: tmux.PaneQuery) flash.Pos {
+fn cursorOf(query: tmux.PaneSnapshot) flash.Pos {
     return if (query.in_mode)
         .{ .row = query.copy_cursor_y, .col = query.copy_cursor_x }
     else
