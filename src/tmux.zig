@@ -17,8 +17,8 @@ pub const PaneQuery = struct {
     scroll_position: u32,
 };
 
-pub fn swapPanes(allocator: std.mem.Allocator, io: Io, a: []const u8, b: []const u8) void {
-    _ = run(allocator, io, &.{ "tmux", "swap-pane", "-s", a, "-t", b }, 64) catch {};
+pub fn swapPanes(allocator: std.mem.Allocator, io: Io, a: []const u8, b: []const u8) !void {
+    _ = try run(allocator, io, &.{ "tmux", "swap-pane", "-s", a, "-t", b }, 64);
 }
 
 pub fn killSession(allocator: std.mem.Allocator, io: Io, session: []const u8) void {
@@ -40,29 +40,51 @@ pub fn launchOverlay(
     const h = std.fmt.bufPrint(&hbuf, "{d}", .{height}) catch unreachable;
     const pane_arg = try std.fmt.allocPrint(allocator, "--pane={s}", .{pane});
     const session_arg = try std.fmt.allocPrint(allocator, "--session={s}", .{session});
-    _ = run(allocator, io, &.{
-        "tmux",
-        "new-session",
-        "-d",
-        "-s",
-        session,
-        "-x",
-        w,
-        "-y",
-        h,
-        bin,
-        pane_arg,
-        session_arg,
-        ";",
-        "set-option",
-        "-t",
-        session,
-        "status",
-        "off",
-    }, 64) catch {
-        killSession(allocator, io, session);
-        return error.TmuxFailed;
-    };
+    _ = try run(allocator, io, &.{
+        "tmux", "new-session", "-d",        "-s", session,      "-x", w,       "-y",     h,
+        bin,    pane_arg,      session_arg, ";",  "set-option", "-t", session, "status", "off",
+    }, 64);
+}
+
+pub fn hasSession(allocator: std.mem.Allocator, io: Io, session: []const u8) bool {
+    _ = run(allocator, io, &.{ "tmux", "has-session", "-t", session }, 64) catch return false;
+    return true;
+}
+
+pub const overlay_option = "@flash-overlay";
+
+pub fn setOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8, session: []const u8, source: []const u8) !void {
+    const value = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ session, source });
+    _ = try run(allocator, io, &.{ "tmux", "set-option", "-p", "-t", pane, overlay_option, value }, 64);
+}
+
+pub fn getOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8) ![]u8 {
+    return run(allocator, io, &.{ "tmux", "display-message", "-t", pane, "-p", "#{@flash-overlay}" }, 4096);
+}
+
+pub fn clearOverlay(allocator: std.mem.Allocator, io: Io, pane: []const u8) void {
+    _ = run(allocator, io, &.{ "tmux", "set-option", "-pu", "-t", pane, overlay_option }, 64) catch {};
+}
+
+pub fn setRemainOnExit(allocator: std.mem.Allocator, io: Io, pane: []const u8) !void {
+    _ = try run(allocator, io, &.{ "tmux", "set-option", "-p", "-t", pane, "remain-on-exit", "on" }, 64);
+}
+
+pub fn paneDead(allocator: std.mem.Allocator, io: Io, pane: []const u8) bool {
+    const raw = run(allocator, io, &.{ "tmux", "display-message", "-t", pane, "-p", "#{pane_dead}" }, 64) catch return false;
+    return std.mem.eql(u8, std.mem.trim(u8, raw, " \t\r\n"), "1");
+}
+
+pub fn copyMode(allocator: std.mem.Allocator, io: Io, pane: []const u8) !void {
+    _ = try run(allocator, io, &.{ "tmux", "copy-mode", "-t", pane }, 64);
+}
+
+pub fn cancelCopyMode(allocator: std.mem.Allocator, io: Io, pane: []const u8) void {
+    _ = run(allocator, io, &.{ "tmux", "copy-mode", "-q", "-t", pane }, 64) catch {};
+}
+
+pub fn refreshOff(allocator: std.mem.Allocator, io: Io, pane: []const u8) void {
+    _ = run(allocator, io, &.{ "tmux", "send-keys", "-t", pane, "-X", "refresh-off" }, 64) catch {};
 }
 
 pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {

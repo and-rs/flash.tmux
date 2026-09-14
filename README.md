@@ -38,7 +38,7 @@ just tmux-test
 
 ## Compared to:
 
-This plugin jumps. It does not yank. Type a pattern, press a label, the copy-mode cursor moves there. From prefix it enters copy-mode; from copy-mode it keeps (and extends) an active selection. Yank with tmux as usual (`v` then `y`).
+This plugin jumps. It does not yank. Type a pattern, press a label, the copy-mode cursor moves there. From prefix, Flash swaps in a warm replica frame then freezes the hidden pane in copy-mode before capturing, so the jump target matches the snapshot; Esc restores the live pane. From copy-mode it keeps (and extends) an active selection. Yank with tmux as usual (`v` then `y`).
 
 > (None are better or worse, just different setups, you make your own conclusions)
 
@@ -56,7 +56,3 @@ Different job (hint-to-copy or easymotion):
 - [Kristijan/flash-copy.tmux](https://github.com/Kristijan/flash-copy.tmux) — search words, copy/range to clipboard
 - [tmux-fingers](https://github.com/Morantron/tmux-fingers), [tmux-thumbs](https://github.com/fcsonline/tmux-thumbs), [tmux-fastcopy](https://github.com/abhinav/tmux-fastcopy) — regex hints (URLs, SHAs, paths) then copy
 - [schasse/tmux-jump](https://github.com/schasse/tmux-jump), [easyjump.tmux](https://github.com/roy2220/easyjump.tmux), [tmux-easy-motion](https://github.com/IngoMeyer441/tmux-easy-motion) — 1–2 char easymotion/leap, not flash incremental search
-
-## Some development considerations:
-
-1. I like the tests separated from the source files.

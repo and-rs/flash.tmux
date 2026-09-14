@@ -57,6 +57,96 @@ probe middle FLASH-MARKER-060
 "$tmux_bin" -L "$socket" send-keys -t "$pane" -X history-bottom
 probe bottom FLASH-MARKER-120
 
+"$tmux_bin" -L "$socket" send-keys -t "$pane" -X cancel
+TMUX="$socket_path,0,0" "$bin" --pane="$pane"
+
+for _ in {1..100}; do
+    if [[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]; then
+        break
+    fi
+    sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]
+
+frozen_before=$("$tmux_bin" -L "$socket" capture-pane -p -M -t "$pane")
+sleep 0.1
+frozen_after=$("$tmux_bin" -L "$socket" capture-pane -p -M -t "$pane")
+[[ $frozen_before == "$frozen_after" ]]
+printf 'ok normal invocation freezes source before capture\n'
+
+overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" C-c
+for _ in {1..100}; do
+    if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.02
+done
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 0 ]]
+printf 'ok Esc restores live pane after normal invocation\n'
+
+TMUX="$socket_path,0,0" "$bin" --pane="$pane"
+for _ in {1..100}; do
+    overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
+    if [[ $overlay_pane != "$pane" ]]; then
+        break
+    fi
+    sleep 0.02
+done
+[[ $overlay_pane != "$pane" ]]
+overlay_pid=$("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{pane_pid}')
+kill -TERM "$overlay_pid"
+for _ in {1..100}; do
+    if [[ $("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{pane_dead}') == 1 ]]; then
+        break
+    fi
+    sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{pane_dead}') == 1 ]]
+TMUX="$socket_path,0,0" "$bin" --pane="$overlay_pane"
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}') == "$pane" ]]
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
+printf 'ok dead overlay restores its source\n'
+
+other=$("$tmux_bin" -L "$socket" split-window -d -P -F '#{pane_id}' -t "$pane" /bin/sh -c 'exec cat')
+other_target=$("$tmux_bin" -L "$socket" display-message -p -t "$other" '#{session_name}:#{window_index}.#{pane_index}')
+
+TMUX="$socket_path,0,0" "$bin" --pane="$pane"
+for _ in {1..100}; do
+    if [[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]; then
+        break
+    fi
+    sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]
+
+overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
+TMUX="$socket_path,0,0" "$bin" --pane="$overlay_pane"
+TMUX="$socket_path,0,0" "$bin" --pane="$other"
+for _ in {1..100}; do
+    if [[ $("$tmux_bin" -L "$socket" display-message -p -t "$other" '#{pane_in_mode}') == 1 ]]; then
+        break
+    fi
+    sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$other" '#{pane_in_mode}') == 1 ]]
+"$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}"
+"$tmux_bin" -L "$socket" has-session -t "flash-overlay-${other#%}"
+printf 'ok duplicate is ignored and panes run independently\n'
+
+"$tmux_bin" -L "$socket" send-keys -t "$session:0.0" C-c
+"$tmux_bin" -L "$socket" send-keys -t "$other_target" C-c
+for _ in {1..100}; do
+    if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null &&
+        ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${other#%}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.02
+done
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${other#%}" 2>/dev/null
+
 if "$interactive"; then
     open_cmd="'$bin' --pane=#{pane_id}"
     "$tmux_bin" -L "$socket" set-option -g mode-keys vi

@@ -4,6 +4,8 @@ const posix = std.posix;
 
 const enter_seq = "\x1b[?7l";
 const leave_seq = "\x1b[?7h";
+const hide_cursor = "\x1b[?25l";
+const show_cursor = "\x1b[?25h";
 
 pub const Screen = struct {
     io: Io,
@@ -42,19 +44,24 @@ pub const Screen = struct {
     }
 
     pub fn restore(self: *Screen) void {
-        self.writeAll(leave_seq) catch {};
+        self.writeAll(show_cursor ++ leave_seq) catch {};
         self.flush() catch {};
         posix.tcsetattr(self.stdin.handle, .FLUSH, self.saved) catch {};
     }
 
+    pub fn clear(self: *Screen) !void {
+        try self.writeAll(hide_cursor ++ "\x1b[H\x1b[2J");
+        try self.flush();
+    }
+
     pub fn paint(self: *Screen, text: []const u8) !void {
-        try self.writeAll("\x1b[H");
+        try self.writeAll(hide_cursor ++ "\x1b[H");
         try self.writeAll(std.mem.trimEnd(u8, text, "\n"));
     }
 
     pub fn park(self: *Screen, row: u32, col: u32) !void {
         var seq: [32]u8 = undefined;
-        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H", .{ row + 1, col + 1 }) catch unreachable;
+        const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H{s}", .{ row + 1, col + 1, show_cursor }) catch unreachable;
         try self.writeAll(n);
         try self.flush();
     }
