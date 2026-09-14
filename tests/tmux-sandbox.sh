@@ -42,6 +42,16 @@ assert_cursor_row() {
   grep -A 1 '^--- capture ---$' <<<"$out" | grep -q "^$marker"
 }
 
+assert_cursor_marker() {
+    local marker=$1 out cursor row
+    out=$(TMUX="$socket_path,0,0" "$bin" --inspect --pane="$pane")
+    grep -qx 'in_mode=true' <<<"$out"
+    cursor=$(grep '^copy_cursor=' <<<"$out")
+    row=${cursor#*,}
+    mapfile -t capture < <(grep -A 12 '^--- capture ---$' <<<"$out")
+    [[ ${capture[$((row + 1))]} == "$marker"* ]]
+}
+
 "$tmux_bin" -L "$socket" copy-mode -t "$pane"
 "$tmux_bin" -L "$socket" send-keys -t "$pane" -X history-top
 probe top FLASH-MARKER-001
@@ -56,6 +66,31 @@ probe middle FLASH-MARKER-060
 
 "$tmux_bin" -L "$socket" send-keys -t "$pane" -X history-bottom
 probe bottom FLASH-MARKER-120
+
+"$tmux_bin" -L "$socket" send-keys -t "$pane" -X refresh-on
+TMUX="$socket_path,0,0" "$bin" --pane="$pane"
+for _ in {1..100}; do
+    if [[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]; then
+        break
+    fi
+    sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]
+frozen_before=$("$tmux_bin" -L "$socket" capture-pane -p -M -t "$pane")
+sleep 0.1
+frozen_after=$("$tmux_bin" -L "$socket" capture-pane -p -M -t "$pane")
+[[ $frozen_before == "$frozen_after" ]]
+overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" Escape
+for _ in {1..100}; do
+    if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.02
+done
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]
+printf 'ok existing copy-mode invocation freezes live refresh\n'
 
 "$tmux_bin" -L "$socket" send-keys -t "$pane" -X cancel
 TMUX="$socket_path,0,0" "$bin" --pane="$pane"
@@ -75,7 +110,7 @@ frozen_after=$("$tmux_bin" -L "$socket" capture-pane -p -M -t "$pane")
 printf 'ok normal invocation freezes source before capture\n'
 
 overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
-"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" C-c
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" Escape
 for _ in {1..100}; do
   if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null; then
     break
@@ -85,6 +120,29 @@ done
 ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
 [[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 0 ]]
 printf 'ok Esc restores live pane after normal invocation\n'
+
+TMUX="$socket_path,0,0" "$bin" --pane="$pane"
+for _ in {1..100}; do
+    if [[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]; then
+        break
+    fi
+    sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 1 ]]
+
+jump_target=$("$tmux_bin" -L "$socket" capture-pane -p -M -t "$pane" | grep -m 1 '^FLASH-NOISE-')
+overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" -l "$jump_target"
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" Enter
+for _ in {1..100}; do
+    if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.02
+done
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
+assert_cursor_marker "$jump_target"
+printf 'ok normal invocation jumps within the frozen snapshot\n'
 
 TMUX="$socket_path,0,0" "$bin" --pane="$pane"
 for _ in {1..100}; do

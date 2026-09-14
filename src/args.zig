@@ -7,6 +7,7 @@ pub const Args = struct {
     version: bool = false,
 };
 
+// this is sort of basic, really basic arg handling
 pub fn parse(args: []const []const u8) !Args {
     var out: Args = .{};
     var i: usize = 1;

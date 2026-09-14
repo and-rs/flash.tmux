@@ -76,13 +76,13 @@ const Overlay = struct {
 
     fn freeze(self: *Overlay) !tmux.PaneQuery {
         var snapshot = try tmux.query(self.init.arena.allocator(), self.init.io, self.source);
-        if (snapshot.in_mode) return snapshot;
-
-        self.owns_copy_mode = true;
-        try tmux.copyMode(self.init.arena.allocator(), self.init.io, self.source);
-        tmux.refreshOff(self.init.arena.allocator(), self.init.io, self.source);
-        snapshot = try tmux.query(self.init.arena.allocator(), self.init.io, self.source);
-        if (!snapshot.in_mode) return error.CopyModeNotEntered;
+        if (!snapshot.in_mode) {
+            self.owns_copy_mode = true;
+            try tmux.copyMode(self.init.arena.allocator(), self.init.io, self.source);
+            snapshot = try tmux.query(self.init.arena.allocator(), self.init.io, self.source);
+            if (!snapshot.in_mode) return error.CopyModeNotEntered;
+        }
+        try tmux.refreshOff(self.init.arena.allocator(), self.init.io, self.source);
         return snapshot;
     }
 

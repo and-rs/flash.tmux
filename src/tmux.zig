@@ -83,8 +83,8 @@ pub fn cancelCopyMode(allocator: std.mem.Allocator, io: Io, pane: []const u8) vo
     _ = run(allocator, io, &.{ "tmux", "copy-mode", "-q", "-t", pane }, 64) catch {};
 }
 
-pub fn refreshOff(allocator: std.mem.Allocator, io: Io, pane: []const u8) void {
-    _ = run(allocator, io, &.{ "tmux", "send-keys", "-t", pane, "-X", "refresh-off" }, 64) catch {};
+pub fn refreshOff(allocator: std.mem.Allocator, io: Io, pane: []const u8) !void {
+    _ = try run(allocator, io, &.{ "tmux", "send-keys", "-t", pane, "-X", "refresh-off" }, 64);
 }
 
 pub fn query(allocator: std.mem.Allocator, io: Io, pane_id: ?[]const u8) !PaneQuery {
