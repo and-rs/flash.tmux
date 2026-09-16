@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+printf '%s\n' '{"ok":true,"id":"flash-wrap-probe","items":[{"n":1,"name":"alpha","path":"/usr/local/share/very/long/path/to/alpha.json","hash":"a1b2c3d4e5f6"},{"n":2,"name":"bravo","path":"/var/lib/data/bravo/nested/output.json","hash":"f6e5d4c3b2a1"},{"n":3,"name":"charlie","url":"https://example.test/api/v1/resources/charlie?expand=true","meta":{"wrapped":true,"cols":80}}],"note":"unformatted oneline json for wrap jump"}'

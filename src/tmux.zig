@@ -74,7 +74,7 @@ pub const Client = struct {
         defer commands.deinit();
         try commands.append(&.{ "set-option", "-p", "-t", pane, "remain-on-exit", "on" });
         try commands.append(&.{ "set-option", "-p", "-t", pane, overlay_option, value });
-        try commands.append(&.{ "swap-pane", "-s", pane, "-t", source });
+        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
         _ = try commands.execute(command_output_limit);
     }
 
@@ -104,7 +104,7 @@ pub const Client = struct {
         var commands = CommandBatch.init(self);
         defer commands.deinit();
         if (cancel_copy_mode) try commands.append(&.{ "copy-mode", "-q", "-t", source });
-        try commands.append(&.{ "swap-pane", "-s", pane, "-t", source });
+        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
         try commands.append(&.{ "kill-session", "-t", session });
         _ = try commands.execute(command_output_limit);
     }
@@ -112,7 +112,7 @@ pub const Client = struct {
     pub fn recoverOverlay(self: Client, pane: []const u8, source: []const u8, session: []const u8) !void {
         var commands = CommandBatch.init(self);
         defer commands.deinit();
-        try commands.append(&.{ "swap-pane", "-s", pane, "-t", source });
+        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
         try commands.append(&.{ "set-option", "-pu", "-t", pane, overlay_option });
         try commands.append(&.{ "kill-session", "-t", session });
         _ = try commands.execute(command_output_limit);
@@ -149,16 +149,17 @@ pub const Client = struct {
             .enter => try appendEnterAt(&commands, request.snapshot.pane_id, request.target_row, target_col, 0),
             .move => {
                 if (!request.still_in_mode) {
-                    try appendEnterAt(&commands, request.snapshot.pane_id, request.snapshot.copy_cursor_y, saved_col, request.snapshot.scroll_position);
+                    try appendEnterAt(&commands, request.snapshot.pane_id, request.target_row, target_col, request.snapshot.scroll_position);
+                } else {
+                    try appendPosition(&commands, request.snapshot.pane_id, request.target_row, target_col);
                 }
-                try appendMoveDelta(&commands, request.snapshot.pane_id, request.snapshot.copy_cursor_y, request.target_row, target_col);
             },
             .extend => {
                 if (!request.still_in_mode) {
                     try appendEnterAt(&commands, request.snapshot.pane_id, request.snapshot.copy_cursor_y, saved_col, request.snapshot.scroll_position);
                     try appendCopyModeCommand(&commands, request.snapshot.pane_id, &.{"begin-selection"});
                 }
-                try appendMoveDelta(&commands, request.snapshot.pane_id, request.snapshot.copy_cursor_y, request.target_row, target_col);
+                try appendPosition(&commands, request.snapshot.pane_id, request.target_row, target_col);
             },
         }
         _ = try commands.execute(command_output_limit);
@@ -201,26 +202,12 @@ fn lineAt(lines: []const []const u8, row: u32) []const u8 {
 fn appendEnterAt(commands: *CommandBatch, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
     try commands.append(&.{ "copy-mode", "-t", pane_id });
     try appendMoveN(commands, pane_id, scroll, "scroll-up");
+    try appendPosition(commands, pane_id, row, col);
+}
+
+fn appendPosition(commands: *CommandBatch, pane_id: []const u8, row: u32, col: u32) !void {
     try appendCopyModeCommand(commands, pane_id, &.{"top-line"});
-    try appendCopyModeCommand(commands, pane_id, &.{"start-of-line"});
     try appendMoveN(commands, pane_id, row, "cursor-down");
-    try appendGotoCol(commands, pane_id, col);
-}
-
-fn appendMoveDelta(
-    commands: *CommandBatch,
-    pane_id: []const u8,
-    from_row: u32,
-    to_row: u32,
-    to_col: u32,
-) !void {
-    if (to_row > from_row) try appendMoveN(commands, pane_id, to_row - from_row, "cursor-down");
-    if (to_row < from_row) try appendMoveN(commands, pane_id, from_row - to_row, "cursor-up");
-    try appendGotoCol(commands, pane_id, to_col);
-}
-
-fn appendGotoCol(commands: *CommandBatch, pane_id: []const u8, col: u32) !void {
-    try appendCopyModeCommand(commands, pane_id, &.{"start-of-line"});
     try appendMoveN(commands, pane_id, col, "cursor-right");
 }
 

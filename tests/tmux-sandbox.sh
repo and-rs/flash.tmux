@@ -43,8 +43,8 @@ assert_cursor_row() {
 }
 
 assert_cursor_marker() {
-    local marker=$1 out cursor row
-    out=$(TMUX="$socket_path,0,0" "$bin" --inspect --pane="$pane")
+    local marker=$1 target=${2:-$pane} out cursor row
+    out=$(TMUX="$socket_path,0,0" "$bin" --inspect --pane="$target")
     grep -qx 'in_mode=true' <<<"$out"
     cursor=$(grep '^copy_cursor=' <<<"$out")
     row=${cursor#*,}
@@ -167,6 +167,47 @@ TMUX="$socket_path,0,0" "$bin" --pane="$overlay_pane"
 ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
 printf 'ok dead overlay restores its source\n'
 
+wrap_line=$(printf 'A%.0s' {1..90})WRAPTOKEN$(printf 'B%.0s' {1..40})
+wrap_pane=$("$tmux_bin" -L "$socket" new-window -d -P -F '#{pane_id}' -t "$session" /bin/sh -c "printf '%s\\n' '$wrap_line'; exec cat")
+wrap_win=$("$tmux_bin" -L "$socket" display-message -p -t "$wrap_pane" '#{session_name}:#{window_index}')
+for _ in {1..100}; do
+  if "$tmux_bin" -L "$socket" capture-pane -p -t "$wrap_pane" | grep -q WRAPTOKEN; then
+    break
+  fi
+  sleep 0.02
+done
+"$tmux_bin" -L "$socket" capture-pane -p -t "$wrap_pane" | grep -q WRAPTOKEN
+
+TMUX="$socket_path,0,0" "$bin" --pane="$wrap_pane"
+for _ in {1..100}; do
+  if [[ $("$tmux_bin" -L "$socket" display-message -p -t "$wrap_pane" '#{pane_in_mode}') == 1 ]]; then
+    break
+  fi
+  sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$wrap_pane" '#{pane_in_mode}') == 1 ]]
+for _ in {1..100}; do
+  overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$wrap_win" '#{pane_id}')
+  if [[ $overlay_pane != "$wrap_pane" ]]; then
+    break
+  fi
+  sleep 0.02
+done
+[[ $overlay_pane != "$wrap_pane" ]]
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" -l WRAPTOKEN
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" Enter
+for _ in {1..100}; do
+  if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${wrap_pane#%}" 2>/dev/null; then
+    break
+  fi
+  sleep 0.02
+done
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${wrap_pane#%}" 2>/dev/null
+wrap_out=$(TMUX="$socket_path,0,0" "$bin" --inspect --pane="$wrap_pane")
+grep -qx 'in_mode=true' <<<"$wrap_out"
+grep -qx 'copy_cursor=10,1' <<<"$wrap_out"
+printf 'ok jump lands on a soft-wrapped line\n'
+
 other=$("$tmux_bin" -L "$socket" split-window -d -P -F '#{pane_id}' -t "$pane" /bin/sh -c 'exec cat')
 other_target=$("$tmux_bin" -L "$socket" display-message -p -t "$other" '#{session_name}:#{window_index}.#{pane_index}')
 
@@ -204,6 +245,30 @@ for _ in {1..100}; do
 done
 ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
 ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${other#%}" 2>/dev/null
+
+"$tmux_bin" -L "$socket" resize-pane -Z -t "$pane"
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{window_zoomed_flag}') == 1 ]]
+TMUX="$socket_path,0,0" "$bin" --pane="$pane"
+for _ in {1..100}; do
+  overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$session:0.0" '#{pane_id}')
+  if [[ $overlay_pane != "$pane" ]]; then
+    break
+  fi
+  sleep 0.02
+done
+[[ $overlay_pane != "$pane" ]]
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{window_zoomed_flag}') == 1 ]]
+"$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" Escape
+for _ in {1..100}; do
+  if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null; then
+    break
+  fi
+  sleep 0.02
+done
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{window_zoomed_flag}') == 1 ]]
+"$tmux_bin" -L "$socket" resize-pane -Z -t "$pane"
+printf 'ok overlay keeps the pane zoomed\n'
 
 if "$interactive"; then
   open_cmd="'$bin' --pane=#{pane_id}"
