@@ -1,6 +1,5 @@
 const std = @import("std");
 const Io = std.Io;
-const flash = @import("flash.zig");
 
 const pane_query_format = "#{pane_id}|#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{?pane_in_mode,1,0}|#{copy_cursor_x}|#{copy_cursor_y}|#{?selection_present,1,0}|#{scroll_position}";
 const overlay_option = "@flash-overlay";
@@ -159,49 +158,10 @@ pub const Client = struct {
     }
 
     pub fn jump(self: Client, request: JumpRequest, lines: []const []const u8) !void {
-        const target_y: i64 = request.target_row;
-        self.log("jump target={d},{d} virtual_y={d} snapshot copy={d},{d} scroll={d}", .{
-            request.target_row,
-            request.target_col,
-            target_y,
-            request.snapshot.copy_cursor_y,
-            request.snapshot.copy_cursor_x,
-            request.snapshot.scroll_position,
-        });
-        if (uniqueSuffix(lines, request.target_row, request.target_col)) |needle| {
-            const current = try self.query(request.snapshot.pane_id);
-            const direction = if (target_y < current.copy_cursor_y) "search-backward" else "search-forward";
-            const pattern = try regexLiteral(self.allocator, needle);
-            try self.copyModeCommand(request.snapshot.pane_id, &.{ direction, "--", pattern });
-            const found = try self.query(request.snapshot.pane_id);
-            if (found.copy_cursor_x == request.target_col and found.copy_cursor_y == target_y) return;
-            self.log("search missed target; using cursor fallback", .{});
-        }
-        switch (jumpKind(request.snapshot.in_mode, request.snapshot.selection_present)) {
-            .enter => {
-                try self.enterCopyMode(request.snapshot.pane_id);
-                try self.positionCursor(request.snapshot.pane_id, target_y, request.target_col, lineAt(lines, request.target_row));
-            },
-            .move => {
-                if (!request.still_in_mode) {
-                    try self.enterCopyMode(request.snapshot.pane_id);
-                }
-                try self.positionCursor(request.snapshot.pane_id, target_y, request.target_col, lineAt(lines, request.target_row));
-            },
-            .extend => {
-                if (!request.still_in_mode) {
-                    try self.enterCopyMode(request.snapshot.pane_id);
-                    try self.positionCursor(
-                        request.snapshot.pane_id,
-                        request.snapshot.copy_cursor_y,
-                        request.snapshot.copy_cursor_x,
-                        lineAt(lines, request.snapshot.copy_cursor_y),
-                    );
-                    try self.copyModeCommand(request.snapshot.pane_id, &.{"begin-selection"});
-                }
-                try self.positionCursor(request.snapshot.pane_id, target_y, request.target_col, lineAt(lines, request.target_row));
-            },
-        }
+        _ = self;
+        _ = request;
+        _ = lines;
+        // TODO: Implement a single-request, exact copy-mode cursor jump.
     }
 
     fn run(self: Client, argv: []const []const u8, stdout_limit: usize) ![]u8 {
@@ -222,58 +182,7 @@ pub const Client = struct {
         return result.stdout;
     }
 
-    fn log(self: Client, comptime format: []const u8, args: anytype) void {
-        if (self.debug) std.debug.print("flash.tmux " ++ format ++ "\n", args);
-    }
-
-    fn enterCopyMode(self: Client, pane_id: []const u8) !void {
-        _ = try self.run(&.{ "tmux", "copy-mode", "-t", pane_id }, command_output_limit);
-    }
-
-    fn positionCursor(self: Client, pane_id: []const u8, target_y: i64, target_col: u32, line: []const u8) !void {
-        var attempt: u8 = 0;
-        while (attempt < 4) : (attempt += 1) {
-            const current = try self.query(pane_id);
-            const delta = target_y - current.copy_cursor_y;
-            if (delta == 0) break;
-            try self.moveCursor(pane_id, @intCast(@abs(delta)), if (delta > 0) "cursor-down" else "cursor-up");
-        }
-
-        var current = try self.query(pane_id);
-        if (current.copy_cursor_y != target_y) return error.CursorPositionFailed;
-
-        const left = flash.cursorRights(line, current.copy_cursor_x);
-        try self.moveCursor(pane_id, left, "cursor-left");
-        current = try self.query(pane_id);
-        if (current.copy_cursor_x != 0) return error.CursorPositionFailed;
-
-        try self.moveCursor(pane_id, flash.cursorRights(line, target_col), "cursor-right");
-        current = try self.query(pane_id);
-        if (current.copy_cursor_x != target_col or current.copy_cursor_y != target_y) return error.CursorPositionFailed;
-    }
-
-    fn copyModeCommand(self: Client, pane_id: []const u8, extra: []const []const u8) !void {
-        var commands = CommandBatch.init(self);
-        defer commands.deinit();
-        try appendCopyModeCommand(&commands, pane_id, extra);
-        _ = try commands.execute(command_output_limit);
-    }
-
-    fn moveCursor(self: Client, pane_id: []const u8, n: u32, motion: []const u8) !void {
-        if (n == 0) return;
-        var count_buffer: [16]u8 = undefined;
-        const count = std.fmt.bufPrint(&count_buffer, "{d}", .{n}) catch unreachable;
-        try self.copyModeCommand(pane_id, &.{ "-N", count, motion });
-    }
 };
-
-pub const JumpKind = enum { enter, move, extend };
-
-pub fn jumpKind(in_mode: bool, selection_present: bool) JumpKind {
-    if (!in_mode) return .enter;
-    if (selection_present) return .extend;
-    return .move;
-}
 
 pub const JumpRequest = struct {
     snapshot: PaneSnapshot,
@@ -281,53 +190,6 @@ pub const JumpRequest = struct {
     target_col: u32,
     still_in_mode: bool,
 };
-
-fn lineAt(lines: []const []const u8, row: u32) []const u8 {
-    if (row >= lines.len) return "";
-    return lines[row];
-}
-
-fn uniqueSuffix(lines: []const []const u8, row: u32, col: u32) ?[]const u8 {
-    const line = lineAt(lines, row);
-    const cells = flash.parseLine(std.heap.page_allocator, line) catch return null;
-    defer std.heap.page_allocator.free(cells);
-    for (cells) |cell| {
-        if (cell.col != col) continue;
-        const start = @intFromPtr(cell.bytes.ptr) - @intFromPtr(line.ptr);
-        var end = start + cell.bytes.len;
-        while (end <= line.len) {
-            const needle = line[start..end];
-            if (countOccurrences(lines, needle) == 1) return needle;
-            if (end == line.len) break;
-            const n = std.unicode.utf8ByteSequenceLength(line[end]) catch 1;
-            end += @min(n, line.len - end);
-        }
-        return null;
-    }
-    return null;
-}
-
-fn regexLiteral(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
-    var pattern: std.ArrayList(u8) = .empty;
-    for (text) |byte| {
-        if (std.mem.indexOfScalar(u8, "\\.^$|?*+()[]{}", byte) != null) try pattern.append(allocator, '\\');
-        try pattern.append(allocator, byte);
-    }
-    return pattern.toOwnedSlice(allocator);
-}
-
-fn countOccurrences(lines: []const []const u8, needle: []const u8) u32 {
-    if (needle.len == 0) return 0;
-    var count: u32 = 0;
-    for (lines) |line| {
-        var start: usize = 0;
-        while (std.mem.indexOfPos(u8, line, start, needle)) |index| {
-            count += 1;
-            start = index + 1;
-        }
-    }
-    return count;
-}
 
 fn appendCopyModeCommand(commands: *CommandBatch, pane_id: []const u8, extra: []const []const u8) !void {
     try commands.appendParts(&.{ "send-keys", "-t", pane_id, "-X" }, extra);
