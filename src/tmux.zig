@@ -159,7 +159,7 @@ pub const Client = struct {
     }
 
     pub fn jump(self: Client, request: JumpRequest, lines: []const []const u8) !void {
-        const target_y = virtualY(request.snapshot.scroll_position, request.target_row);
+        const target_y: i64 = request.target_row;
         self.log("jump target={d},{d} virtual_y={d} snapshot copy={d},{d} scroll={d}", .{
             request.target_row,
             request.target_col,
@@ -168,6 +168,15 @@ pub const Client = struct {
             request.snapshot.copy_cursor_x,
             request.snapshot.scroll_position,
         });
+        if (uniqueSuffix(lines, request.target_row, request.target_col)) |needle| {
+            const current = try self.query(request.snapshot.pane_id);
+            const direction = if (target_y < current.copy_cursor_y) "search-backward" else "search-forward";
+            const pattern = try regexLiteral(self.allocator, needle);
+            try self.copyModeCommand(request.snapshot.pane_id, &.{ direction, "--", pattern });
+            const found = try self.query(request.snapshot.pane_id);
+            if (found.copy_cursor_x == request.target_col and found.copy_cursor_y == target_y) return;
+            self.log("search missed target; using cursor fallback", .{});
+        }
         switch (jumpKind(request.snapshot.in_mode, request.snapshot.selection_present)) {
             .enter => {
                 try self.enterCopyMode(request.snapshot.pane_id);
@@ -184,7 +193,7 @@ pub const Client = struct {
                     try self.enterCopyMode(request.snapshot.pane_id);
                     try self.positionCursor(
                         request.snapshot.pane_id,
-                        virtualY(request.snapshot.scroll_position, request.snapshot.copy_cursor_y),
+                        request.snapshot.copy_cursor_y,
                         request.snapshot.copy_cursor_x,
                         lineAt(lines, request.snapshot.copy_cursor_y),
                     );
@@ -225,13 +234,13 @@ pub const Client = struct {
         var attempt: u8 = 0;
         while (attempt < 4) : (attempt += 1) {
             const current = try self.query(pane_id);
-            const delta = target_y - virtualY(current.scroll_position, current.copy_cursor_y);
+            const delta = target_y - current.copy_cursor_y;
             if (delta == 0) break;
             try self.moveCursor(pane_id, @intCast(@abs(delta)), if (delta > 0) "cursor-down" else "cursor-up");
         }
 
         var current = try self.query(pane_id);
-        if (virtualY(current.scroll_position, current.copy_cursor_y) != target_y) return error.CursorPositionFailed;
+        if (current.copy_cursor_y != target_y) return error.CursorPositionFailed;
 
         const left = flash.cursorRights(line, current.copy_cursor_x);
         try self.moveCursor(pane_id, left, "cursor-left");
@@ -240,7 +249,7 @@ pub const Client = struct {
 
         try self.moveCursor(pane_id, flash.cursorRights(line, target_col), "cursor-right");
         current = try self.query(pane_id);
-        if (current.copy_cursor_x != target_col or virtualY(current.scroll_position, current.copy_cursor_y) != target_y) return error.CursorPositionFailed;
+        if (current.copy_cursor_x != target_col or current.copy_cursor_y != target_y) return error.CursorPositionFailed;
     }
 
     fn copyModeCommand(self: Client, pane_id: []const u8, extra: []const []const u8) !void {
@@ -278,8 +287,46 @@ fn lineAt(lines: []const []const u8, row: u32) []const u8 {
     return lines[row];
 }
 
-fn virtualY(scroll: u32, row: u32) i64 {
-    return @as(i64, @intCast(row)) - @as(i64, @intCast(scroll));
+fn uniqueSuffix(lines: []const []const u8, row: u32, col: u32) ?[]const u8 {
+    const line = lineAt(lines, row);
+    const cells = flash.parseLine(std.heap.page_allocator, line) catch return null;
+    defer std.heap.page_allocator.free(cells);
+    for (cells) |cell| {
+        if (cell.col != col) continue;
+        const start = @intFromPtr(cell.bytes.ptr) - @intFromPtr(line.ptr);
+        var end = start + cell.bytes.len;
+        while (end <= line.len) {
+            const needle = line[start..end];
+            if (countOccurrences(lines, needle) == 1) return needle;
+            if (end == line.len) break;
+            const n = std.unicode.utf8ByteSequenceLength(line[end]) catch 1;
+            end += @min(n, line.len - end);
+        }
+        return null;
+    }
+    return null;
+}
+
+fn regexLiteral(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    var pattern: std.ArrayList(u8) = .empty;
+    for (text) |byte| {
+        if (std.mem.indexOfScalar(u8, "\\.^$|?*+()[]{}", byte) != null) try pattern.append(allocator, '\\');
+        try pattern.append(allocator, byte);
+    }
+    return pattern.toOwnedSlice(allocator);
+}
+
+fn countOccurrences(lines: []const []const u8, needle: []const u8) u32 {
+    if (needle.len == 0) return 0;
+    var count: u32 = 0;
+    for (lines) |line| {
+        var start: usize = 0;
+        while (std.mem.indexOfPos(u8, line, start, needle)) |index| {
+            count += 1;
+            start = index + 1;
+        }
+    }
+    return count;
 }
 
 fn appendCopyModeCommand(commands: *CommandBatch, pane_id: []const u8, extra: []const []const u8) !void {

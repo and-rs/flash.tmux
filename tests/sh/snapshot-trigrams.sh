@@ -83,7 +83,9 @@ while IFS=$'\t' read -r pattern row col; do
     exit 1
   }
 
-  "$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" -l "$pattern"
+  for ((i = 0; i < ${#pattern}; i++)); do
+    "$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" -l "${pattern:i:1}"
+  done
   "$tmux_bin" -L "$socket" send-keys -t "$overlay_pane" Enter
   for _ in {1..100}; do
     if ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null; then

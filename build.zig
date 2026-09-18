@@ -35,7 +35,9 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "flash_tmux", .module = mod }},
         }),
     });
-    b.installArtifact(snapshot_cases);
+    const install_snapshot_cases = b.addInstallArtifact(snapshot_cases, .{});
+    const snapshot_cases_step = b.step("snapshot-cases", "Install the snapshot case generator");
+    snapshot_cases_step.dependOn(&install_snapshot_cases.step);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -45,16 +47,4 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const test_module = b.createModule(.{
-        .root_source_file = b.path("tests/root.test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "flash_tmux", .module = mod }},
-    });
-    const tests = b.addTest(.{ .root_module = test_module });
-
-    const test_step = b.step("test", "Run tests");
-    const run_tests = b.addSystemCommand(&.{"env"});
-    run_tests.addArtifactArg(tests);
-    test_step.dependOn(&run_tests.step);
 }

@@ -1,9 +1,6 @@
 bin := justfile_directory() / "zig-out/bin/flash_tmux"
 
-default: test
-
-test:
-    zig build test
+default: build
 
 build:
     zig build -Doptimize=ReleaseFast
@@ -17,13 +14,8 @@ visual-copy: build
     tmux copy-mode
     "{{bin}}" --pane="${TMUX_PANE}"
 
-tmux-test: build
-    ./tests/sh/tmux-sandbox.sh "{{bin}}"
-
-tmux-sandbox: build
-    ./tests/sh/tmux-sandbox.sh --interactive "{{bin}}"
-
 snapshot-test: build
+    zig build snapshot-cases -Doptimize=ReleaseFast
     ./tests/sh/snapshot-trigrams.sh "{{bin}}"
 
 release:

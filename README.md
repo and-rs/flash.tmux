@@ -33,7 +33,6 @@ Type a pattern, then a label. Esc aborts. Enter jumps the nearest match. `@flash
 just test
 just build
 just visual # inside tmux
-just tmux-test
 ```
 
 ## Compared to:

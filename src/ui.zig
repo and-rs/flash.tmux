@@ -31,7 +31,6 @@ pub const Session = struct {
         try paint(&self.screen, text, &state);
         while (true) {
             const b = try self.screen.readByte();
-            std.debug.print("flash.tmux key={d}\n", .{b});
             if (b == 0x03 or !try state.step(b)) break;
             try paint(&self.screen, text, &state);
         }
