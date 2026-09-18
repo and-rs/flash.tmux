@@ -1,6 +1,9 @@
 bin := justfile_directory() / "zig-out/bin/flash_tmux"
 
-default: build
+default: test
+
+test:
+    zig build test
 
 build:
     zig build -Doptimize=ReleaseFast
