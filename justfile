@@ -18,10 +18,13 @@ visual-copy: build
     "{{bin}}" --pane="${TMUX_PANE}"
 
 tmux-test: build
-    ./tests/tmux-sandbox.sh "{{bin}}"
+    ./tests/sh/tmux-sandbox.sh "{{bin}}"
 
 tmux-sandbox: build
-    ./tests/tmux-sandbox.sh --interactive "{{bin}}"
+    ./tests/sh/tmux-sandbox.sh --interactive "{{bin}}"
+
+snapshot-test: build
+    ./tests/sh/snapshot-trigrams.sh "{{bin}}"
 
 release:
     #!/usr/bin/env sh

@@ -26,6 +26,17 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    const snapshot_cases = b.addExecutable(.{
+        .name = "snapshot_cases",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/snapshot-cases.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "flash_tmux", .module = mod }},
+        }),
+    });
+    b.installArtifact(snapshot_cases);
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);

@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn inspect(init: std.process.Init, opts: cli.Args) !void {
     const arena = init.arena.allocator();
-    const client = tmux.Client.init(arena, init.io);
+    const client = tmux.Client.init(arena, init.io, tmux.debugEnabled(init));
     const q = try client.query(opts.pane);
     const raw = try client.capture(q);
     try printSnapshot(init.io, q, raw);

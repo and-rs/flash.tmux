@@ -9,6 +9,11 @@ const query_output_limit = 4096;
 const capture_output_limit = 1024 * 1024;
 const max_query_fields = 16;
 
+pub fn debugEnabled(init: std.process.Init) bool {
+    const value = init.minimal.environ.getPosix("FLASH_TMUX_DEBUG") orelse return false;
+    return std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true");
+}
+
 const QueryField = enum(usize) {
     pane_id,
     width,
@@ -40,9 +45,10 @@ pub const PaneSnapshot = struct {
 pub const Client = struct {
     allocator: std.mem.Allocator,
     io: Io,
+    debug: bool,
 
-    pub fn init(allocator: std.mem.Allocator, io: Io) Client {
-        return .{ .allocator = allocator, .io = io };
+    pub fn init(allocator: std.mem.Allocator, io: Io, debug: bool) Client {
+        return .{ .allocator = allocator, .io = io, .debug = debug };
     }
 
     pub fn killSession(self: Client, session: []const u8) void {
@@ -57,10 +63,23 @@ pub const Client = struct {
         const pane_arg = try std.fmt.allocPrint(self.allocator, "--pane={s}", .{pane});
         const session_arg = try std.fmt.allocPrint(self.allocator, "--session={s}", .{session});
 
-        _ = try self.run(&.{
-            "tmux", "new-session", "-d",        "-s", session,      "-x", width_arg, "-y",     height_arg,
-            bin,    pane_arg,      session_arg, ";",  "set-option", "-t", session,   "status", "off",
-        }, command_output_limit);
+        if (self.debug) {
+            _ = try self.run(&.{
+                "tmux", "new-session", "-d", "-s", session, "-x", width_arg, "-y", height_arg,
+                "-e", "FLASH_TMUX_DEBUG=1", "-e", "FLASH_TMUX_LOG=/tmp/flash.tmux.log",
+                "sh", "-c", "exec \"$@\" 2>>\"$FLASH_TMUX_LOG\"", "flash_tmux", bin, pane_arg, session_arg,
+                ";", "set-option", "-t", session, "status", "off",
+            }, command_output_limit);
+        } else {
+            _ = try self.run(&.{
+                "tmux", "new-session", "-d",        "-s", session,      "-x", width_arg, "-y",     height_arg,
+                bin,    pane_arg,      session_arg, ";",  "set-option", "-t", session,   "status", "off",
+            }, command_output_limit);
+        }
+        if (self.debug) {
+            const message = try std.fmt.allocPrint(self.allocator, "flash.tmux dev: jump mode ({s})", .{pane});
+            _ = self.run(&.{ "tmux", "display-message", "-d", "3000", message }, command_output_limit) catch {};
+        }
     }
 
     pub fn hasSession(self: Client, session: []const u8) bool {
@@ -100,12 +119,11 @@ pub const Client = struct {
         return parseQuery(try commands.execute(query_output_limit));
     }
 
-    pub fn restoreOverlay(self: Client, pane: []const u8, source: []const u8, session: []const u8, cancel_copy_mode: bool) !void {
+    pub fn restoreOverlay(self: Client, pane: []const u8, source: []const u8, cancel_copy_mode: bool) !void {
         var commands = CommandBatch.init(self);
         defer commands.deinit();
         if (cancel_copy_mode) try commands.append(&.{ "copy-mode", "-q", "-t", source });
         try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
-        try commands.append(&.{ "kill-session", "-t", session });
         _ = try commands.execute(command_output_limit);
     }
 
@@ -141,31 +159,48 @@ pub const Client = struct {
     }
 
     pub fn jump(self: Client, request: JumpRequest, lines: []const []const u8) !void {
-        var commands = CommandBatch.init(self);
-        defer commands.deinit();
-        const target_col = flash.cursorRights(lineAt(lines, request.target_row), request.target_col);
-        const saved_col = flash.cursorRights(lineAt(lines, request.snapshot.copy_cursor_y), request.snapshot.copy_cursor_x);
+        const target_y = virtualY(request.snapshot.scroll_position, request.target_row);
+        self.log("jump target={d},{d} virtual_y={d} snapshot copy={d},{d} scroll={d}", .{
+            request.target_row,
+            request.target_col,
+            target_y,
+            request.snapshot.copy_cursor_y,
+            request.snapshot.copy_cursor_x,
+            request.snapshot.scroll_position,
+        });
         switch (jumpKind(request.snapshot.in_mode, request.snapshot.selection_present)) {
-            .enter => try appendEnterAt(&commands, request.snapshot.pane_id, request.target_row, target_col, 0),
+            .enter => {
+                try self.enterCopyMode(request.snapshot.pane_id);
+                try self.positionCursor(request.snapshot.pane_id, target_y, request.target_col, lineAt(lines, request.target_row));
+            },
             .move => {
                 if (!request.still_in_mode) {
-                    try appendEnterAt(&commands, request.snapshot.pane_id, request.target_row, target_col, request.snapshot.scroll_position);
-                } else {
-                    try appendPosition(&commands, request.snapshot.pane_id, request.target_row, target_col);
+                    try self.enterCopyMode(request.snapshot.pane_id);
                 }
+                try self.positionCursor(request.snapshot.pane_id, target_y, request.target_col, lineAt(lines, request.target_row));
             },
             .extend => {
                 if (!request.still_in_mode) {
-                    try appendEnterAt(&commands, request.snapshot.pane_id, request.snapshot.copy_cursor_y, saved_col, request.snapshot.scroll_position);
-                    try appendCopyModeCommand(&commands, request.snapshot.pane_id, &.{"begin-selection"});
+                    try self.enterCopyMode(request.snapshot.pane_id);
+                    try self.positionCursor(
+                        request.snapshot.pane_id,
+                        virtualY(request.snapshot.scroll_position, request.snapshot.copy_cursor_y),
+                        request.snapshot.copy_cursor_x,
+                        lineAt(lines, request.snapshot.copy_cursor_y),
+                    );
+                    try self.copyModeCommand(request.snapshot.pane_id, &.{"begin-selection"});
                 }
-                try appendPosition(&commands, request.snapshot.pane_id, request.target_row, target_col);
+                try self.positionCursor(request.snapshot.pane_id, target_y, request.target_col, lineAt(lines, request.target_row));
             },
         }
-        _ = try commands.execute(command_output_limit);
     }
 
     fn run(self: Client, argv: []const []const u8, stdout_limit: usize) ![]u8 {
+        if (self.debug) {
+            std.debug.print("flash.tmux tmux", .{});
+            for (argv) |arg| std.debug.print(" [{s}]", .{arg});
+            std.debug.print("\n", .{});
+        }
         const result = try std.process.run(self.allocator, self.io, .{
             .argv = argv,
             .stdout_limit = .limited(stdout_limit),
@@ -176,6 +211,50 @@ pub const Client = struct {
             else => return error.TmuxFailed,
         }
         return result.stdout;
+    }
+
+    fn log(self: Client, comptime format: []const u8, args: anytype) void {
+        if (self.debug) std.debug.print("flash.tmux " ++ format ++ "\n", args);
+    }
+
+    fn enterCopyMode(self: Client, pane_id: []const u8) !void {
+        _ = try self.run(&.{ "tmux", "copy-mode", "-t", pane_id }, command_output_limit);
+    }
+
+    fn positionCursor(self: Client, pane_id: []const u8, target_y: i64, target_col: u32, line: []const u8) !void {
+        var attempt: u8 = 0;
+        while (attempt < 4) : (attempt += 1) {
+            const current = try self.query(pane_id);
+            const delta = target_y - virtualY(current.scroll_position, current.copy_cursor_y);
+            if (delta == 0) break;
+            try self.moveCursor(pane_id, @intCast(@abs(delta)), if (delta > 0) "cursor-down" else "cursor-up");
+        }
+
+        var current = try self.query(pane_id);
+        if (virtualY(current.scroll_position, current.copy_cursor_y) != target_y) return error.CursorPositionFailed;
+
+        const left = flash.cursorRights(line, current.copy_cursor_x);
+        try self.moveCursor(pane_id, left, "cursor-left");
+        current = try self.query(pane_id);
+        if (current.copy_cursor_x != 0) return error.CursorPositionFailed;
+
+        try self.moveCursor(pane_id, flash.cursorRights(line, target_col), "cursor-right");
+        current = try self.query(pane_id);
+        if (current.copy_cursor_x != target_col or virtualY(current.scroll_position, current.copy_cursor_y) != target_y) return error.CursorPositionFailed;
+    }
+
+    fn copyModeCommand(self: Client, pane_id: []const u8, extra: []const []const u8) !void {
+        var commands = CommandBatch.init(self);
+        defer commands.deinit();
+        try appendCopyModeCommand(&commands, pane_id, extra);
+        _ = try commands.execute(command_output_limit);
+    }
+
+    fn moveCursor(self: Client, pane_id: []const u8, n: u32, motion: []const u8) !void {
+        if (n == 0) return;
+        var count_buffer: [16]u8 = undefined;
+        const count = std.fmt.bufPrint(&count_buffer, "{d}", .{n}) catch unreachable;
+        try self.copyModeCommand(pane_id, &.{ "-N", count, motion });
     }
 };
 
@@ -199,22 +278,8 @@ fn lineAt(lines: []const []const u8, row: u32) []const u8 {
     return lines[row];
 }
 
-fn appendEnterAt(commands: *CommandBatch, pane_id: []const u8, row: u32, col: u32, scroll: u32) !void {
-    try commands.append(&.{ "copy-mode", "-t", pane_id });
-    try appendMoveN(commands, pane_id, scroll, "scroll-up");
-    try appendPosition(commands, pane_id, row, col);
-}
-
-fn appendPosition(commands: *CommandBatch, pane_id: []const u8, row: u32, col: u32) !void {
-    try appendCopyModeCommand(commands, pane_id, &.{"top-line"});
-    try appendMoveN(commands, pane_id, row, "cursor-down");
-    try appendMoveN(commands, pane_id, col, "cursor-right");
-}
-
-fn appendMoveN(commands: *CommandBatch, pane_id: []const u8, n: u32, motion: []const u8) !void {
-    if (n == 0) return;
-    const count = try std.fmt.allocPrint(commands.client.allocator, "{d}", .{n});
-    try appendCopyModeCommand(commands, pane_id, &.{ "-N", count, motion });
+fn virtualY(scroll: u32, row: u32) i64 {
+    return @as(i64, @intCast(row)) - @as(i64, @intCast(scroll));
 }
 
 fn appendCopyModeCommand(commands: *CommandBatch, pane_id: []const u8, extra: []const []const u8) !void {

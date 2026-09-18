@@ -15,9 +15,13 @@ get_option() {
 }
 
 debug=0
-case $(get_option "@flash-debug" "") in
-    1|on|true|yes) debug=1 ;;
-esac
+if [ "${FLASH_TMUX_DEV:-0}" -eq 1 ]; then
+    debug=1
+else
+    case $(get_option "@flash-debug" "") in
+        1|on|true|yes) debug=1 ;;
+    esac
+fi
 
 log() {
     [ "$debug" -eq 1 ] || return 0
@@ -186,7 +190,11 @@ if [ ! -x "$BIN" ]; then
     exit 0
 fi
 
-open="'$BIN' --pane=#{pane_id}"
+if [ "$debug" -eq 1 ]; then
+    open="FLASH_TMUX_DEBUG=1 FLASH_TMUX_LOG='$LOG' '$BIN' --pane=#{pane_id} >>'$LOG' 2>&1"
+else
+    open="'$BIN' --pane=#{pane_id}"
+fi
 if ! tmux bind-key "$key" run-shell -b "$open"; then
     say "bind prefix-$key failed"
     exit 0

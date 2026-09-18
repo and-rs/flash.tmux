@@ -8,7 +8,7 @@ pub const LaunchResult = enum { started, already_active, recovered };
 
 pub fn launch(init: std.process.Init, pane: ?[]const u8) !LaunchResult {
     const allocator = init.arena.allocator();
-    const client = tmux.Client.init(allocator, init.io);
+    const client = tmux.Client.init(allocator, init.io, tmux.debugEnabled(init));
     const query = try client.query(pane);
 
     if (parseRef(client.overlayReference(query.pane_id) catch "")) |ref| {
@@ -36,13 +36,11 @@ pub fn run(init: std.process.Init, source: []const u8, session: []const u8) !voi
     defer screen.close();
 
     const allocator = init.arena.allocator();
-    const client = tmux.Client.init(allocator, init.io);
-    const warm = try client.query(source);
-    try screen.showWarmFrame(try client.capture(warm), cursorOf(warm));
-    try overlay.show();
-
+    const client = tmux.Client.init(allocator, init.io, tmux.debugEnabled(init));
     const snapshot = try overlay.freeze();
     const raw = try client.capture(snapshot);
+    try screen.showWarmFrame(raw, cursorOf(snapshot));
+    try overlay.show();
     const plain = try sgr.strip(allocator, raw);
     const lines = try splitLines(allocator, plain);
     const dim = try sgr.dim(allocator, raw);
@@ -53,7 +51,7 @@ pub fn run(init: std.process.Init, source: []const u8, session: []const u8) !voi
         .cursor = cursorOf(snapshot),
     })) {
         .abort => {},
-        .jump => |match| try overlay.commit(match, snapshot, lines),
+        .jump => |match| try overlay.commit(match, snapshot, lines, raw),
     }
 }
 
@@ -64,6 +62,7 @@ const Overlay = struct {
     owns_copy_mode: bool = false,
     committed: bool = false,
     shown: bool = false,
+    closed: bool = false,
 
     fn show(self: *Overlay) !void {
         const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return error.MissingOverlayPane;
@@ -81,8 +80,17 @@ const Overlay = struct {
         return snapshot;
     }
 
-    fn commit(self: *Overlay, match: flash.Match, snapshot: tmux.PaneSnapshot, lines: []const []const u8) !void {
+    fn commit(self: *Overlay, match: flash.Match, snapshot: tmux.PaneSnapshot, lines: []const []const u8, raw: []const u8) !void {
         const tmux_client = self.client();
+        if (tmux_client.debug) std.debug.print("flash.tmux match start={d},{d} end={d},{d}\n", .{
+            match.pos.row,
+            match.pos.col,
+            match.end_pos.row,
+            match.end_pos.col,
+        });
+        if (tmux_client.debug) writeSnapshot(self.init.io, raw, snapshot.pane_id);
+        self.committed = true;
+        try self.restore(false);
         const now = try tmux_client.query(snapshot.pane_id);
         try tmux_client.jump(.{
             .snapshot = snapshot,
@@ -90,27 +98,45 @@ const Overlay = struct {
             .target_col = match.pos.col,
             .still_in_mode = now.in_mode,
         }, lines);
-        self.committed = true;
+        tmux_client.killSession(self.session);
     }
 
     fn close(self: *Overlay) void {
         if (self.shown) {
-            const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return;
-            self.client().restoreOverlay(
-                pane,
-                self.source,
-                self.session,
-                self.owns_copy_mode and !self.committed,
-            ) catch return;
+            self.restore(true) catch return;
             return;
         }
-        self.client().killSession(self.session);
+        if (!self.closed) self.client().killSession(self.session);
+    }
+
+    fn restore(self: *Overlay, kill_session: bool) !void {
+        const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return error.MissingOverlayPane;
+        try self.client().restoreOverlay(
+            pane,
+            self.source,
+            self.owns_copy_mode and !self.committed,
+        );
+        self.shown = false;
+        self.closed = true;
+        if (kill_session) self.client().killSession(self.session);
     }
 
     fn client(self: *const Overlay) tmux.Client {
-        return .init(self.init.arena.allocator(), self.init.io);
+        return .init(self.init.arena.allocator(), self.init.io, tmux.debugEnabled(self.init));
     }
 };
+
+fn writeSnapshot(io: std.Io, raw: []const u8, pane_id: []const u8) void {
+    var tmp = std.Io.Dir.openDirAbsolute(io, "/tmp", .{}) catch return;
+    defer tmp.close(io);
+    tmp.createDirPath(io, "flash.tmux-history") catch return;
+
+    var path: [160]u8 = undefined;
+    const suffix = std.mem.trimStart(u8, pane_id, "%");
+    const name = std.fmt.bufPrint(&path, "flash.tmux-history/{d}-pane-{s}.txt", .{ std.Io.Clock.real.now(io).nanoseconds, suffix }) catch return;
+    tmp.writeFile(io, .{ .sub_path = name, .data = raw }) catch return;
+    std.debug.print("flash.tmux snapshot=/tmp/{s}\n", .{name});
+}
 
 const Ref = struct { session: []const u8, source: []const u8 };
 
