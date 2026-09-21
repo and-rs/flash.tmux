@@ -58,5 +58,5 @@ Different job (hint-to-copy or easymotion):
 
 ## TODO:
 
-- [ ] find edge cases (perhaps make a testing harness with snapshots)
-- [ ] create benchmarks comparing the alternatives
+- [x] Find edge cases (perhaps make a testing harness with snapshots)
+- [ ] Create benchmarks comparing the alternatives
