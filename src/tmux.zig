@@ -227,7 +227,7 @@ pub const Client = struct {
         var end_buffer: [16]u8 = undefined;
         const start_arg = std.fmt.bufPrint(&start_buffer, "{d}", .{start}) catch unreachable;
         const end_arg = std.fmt.bufPrint(&end_buffer, "{d}", .{end}) catch unreachable;
-        return self.run(&.{ "tmux", "capture-pane", "-t", pane_id, "-p", "-e", "-N", "-S", start_arg, "-E", end_arg }, capture_output_limit);
+        return self.run(&.{ "tmux", "capture-pane", "-t", pane_id, "-p", "-e", "-N", "-M", "-S", start_arg, "-E", end_arg }, capture_output_limit);
     }
 
     pub fn jump(self: Client, request: JumpRequest, lines: []const []const u8) !void {
