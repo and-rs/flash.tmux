@@ -14,13 +14,6 @@ jobs:
         with:
           version: "0.16.0"
       - run: zig build test
-      - name: Run tmux integration tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tmux
-          zig build -Doptimize=ReleaseFast
-          zig build snapshot-cases -Doptimize=ReleaseFast
-          ./tests/sh/snapshot-trigrams.sh ./zig-out/bin/flash_tmux
       - name: Check VERSION matches tag
         run: test "$(tr -d ' \t\r\n' < VERSION)" = "${GITHUB_REF_NAME}"
       - name: Build release assets

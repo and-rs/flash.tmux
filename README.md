@@ -1,6 +1,6 @@
 # flash.tmux
 
-Leap around a tmux pane like flash.nvim. Zig 0.16.
+Leap around a tmux pane like flash.nvim. Requires tmux 3.6+ and Zig 0.16 for local builds.
 
 ## Install
 
