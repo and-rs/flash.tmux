@@ -166,7 +166,7 @@ pub const Client = struct {
         try commands.append(&.{ "set-option", "-p", "-t", replica, overlay_option, marker });
         try commands.append(&.{ "swap-pane", "-Z", "-s", replica, "-t", source });
         if (enter_copy_mode) try commands.append(&.{ "copy-mode", "-t", source });
-        try appendCopyModeCommand(&commands, source, &.{"refresh-off"});
+        if (refresh_was_active) try appendCopyModeCommand(&commands, source, &.{"refresh-off"});
         try commands.append(&.{ "display-message", "-t", source, "-p", copy_query_format });
         const state = try parseCopyQuery(try commands.execute(query_output_limit));
         const raw = try self.captureView(state.pane_id, state.cursor.scroll, state.height);
