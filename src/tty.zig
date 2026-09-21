@@ -44,13 +44,13 @@ pub const Screen = struct {
     }
 
     pub fn restore(self: *Screen) void {
-        self.writeAll(show_cursor ++ leave_seq) catch {};
+        self.writeAll("\x1b[0m" ++ show_cursor ++ leave_seq) catch {};
         self.flush() catch {};
         posix.tcsetattr(self.stdin.handle, .FLUSH, self.saved) catch {};
     }
 
     pub fn clear(self: *Screen) !void {
-        try self.writeAll(hide_cursor ++ "\x1b[H\x1b[2J");
+        try self.writeAll("\x1b[0m" ++ hide_cursor ++ "\x1b[H\x1b[2J");
         try self.flush();
     }
 

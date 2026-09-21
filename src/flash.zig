@@ -286,10 +286,10 @@ const Labeler = struct {
         try self.filter(state, &ranked);
 
         for (ranked.items) |i| {
-            _ = self.label(state, &state.results.items[i], true);
+            _ = try self.label(state, &state.results.items[i], true);
         }
         for (ranked.items) |i| {
-            if (!self.label(state, &state.results.items[i], false)) break;
+            if (!try self.label(state, &state.results.items[i], false)) break;
         }
     }
 
@@ -358,7 +358,7 @@ const Labeler = struct {
         }, SortCtx.lessThan);
     }
 
-    fn label(self: *Labeler, state: *State, m: *Match, used: bool) bool {
+    fn label(self: *Labeler, state: *State, m: *Match, used: bool) !bool {
         if (m.label != null) return true;
         const pos = Pos.id(m.pos);
         const candidate: ?u8 = if (used) self.used.get(pos) else self.first();
@@ -367,7 +367,7 @@ const Labeler = struct {
                 self.use(lab);
                 const reuse = state.opts.reuse == .all or
                     (state.opts.reuse == .lowercase and std.ascii.isLower(lab));
-                if (reuse) self.used.put(pos, lab) catch {};
+                if (reuse) try self.used.put(pos, lab);
                 m.label = lab;
             }
         }

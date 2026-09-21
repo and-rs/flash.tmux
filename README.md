@@ -25,7 +25,7 @@ set -g @flash-copy-key 's'
 set -g @flash-debug 'off'
 ```
 
-Type a pattern, then a label. Esc aborts. Enter jumps the nearest match. `@flash-debug` `1`/`on`/`true`/`yes` logs to `/tmp/flash.tmux.log`. `flash.dev.tmux` enables this logging automatically.
+Type a pattern, then a label. Esc aborts. Enter jumps the nearest match. Operational failures stay on a prominent error screen until Ctrl-C restores and closes the overlay. `@flash-debug` `1`/`on`/`true`/`yes` logs to `/tmp/flash.tmux.log`. `flash.dev.tmux` enables this logging automatically.
 
 ## Dev
 

@@ -1,6 +1,7 @@
 const build_options = @import("build_options");
 
 pub const args = @import("args.zig");
+pub const error_screen = @import("error.zig");
 pub const flash = @import("flash.zig");
 pub const overlay = @import("overlay.zig");
 pub const sgr = @import("sgr.zig");
