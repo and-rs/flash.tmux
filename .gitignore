@@ -4,4 +4,3 @@ dist/
 *.o
 
 some
-tests/fixtures

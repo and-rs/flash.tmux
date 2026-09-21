@@ -59,5 +59,4 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addSystemCommand(&.{"env"});
     run_tests.addArtifactArg(tests);
     test_step.dependOn(&run_tests.step);
-
 }

@@ -18,7 +18,7 @@ pub fn launch(init: std.process.Init, pane: ?[]const u8) !LaunchResult {
         } else if (!(try client.paneDead(query.pane_id))) {
             return .already_active;
         } else {
-            try client.recoverOverlay(query.pane_id, ref.source, ref.session);
+            try client.recoverOverlay(query.pane_id, ref.source, ref.session, ref.owns_copy_mode, ref.refresh_was_active);
             return .recovered;
         }
     }
@@ -164,7 +164,13 @@ const Overlay = struct {
         }
         if (before.width != warm.width or before.height != warm.height or
             replica.width != warm.width or replica.height != warm.height) return error.GeometryChanged;
-        const frozen = try self.client().showAndFreezeCapture(pane, self.source, self.session, !before.in_mode);
+        const frozen = try self.client().showAndFreezeCapture(
+            pane,
+            self.source,
+            self.session,
+            self.owns_copy_mode,
+            self.refresh_was_active,
+        );
         self.phase = .source_frozen;
         if (frozen.state.width != warm.width or frozen.state.height != warm.height) return error.GeometryChanged;
         return frozen;
@@ -273,19 +279,37 @@ fn writeSnapshot(io: std.Io, raw: []const u8, pane_id: []const u8) void {
     std.debug.print("flash.tmux snapshot=/tmp/{s}\n", .{name});
 }
 
-const Ref = struct { session: []const u8, source: []const u8 };
+const Ref = struct {
+    session: []const u8,
+    source: []const u8,
+    owns_copy_mode: bool,
+    refresh_was_active: bool,
+};
 
 fn parseRef(raw: []const u8) ?Ref {
     const value = std.mem.trim(u8, raw, " \t\r\n");
-    const sep = std.mem.lastIndexOfScalar(u8, value, ':') orelse return null;
-    if (sep == 0 or sep + 1 >= value.len) return null;
-    return .{ .session = value[0..sep], .source = value[sep + 1 ..] };
+    var fields: [4][]const u8 = undefined;
+    var count: usize = 0;
+    var it = std.mem.splitScalar(u8, value, '|');
+    while (it.next()) |field| {
+        if (count == fields.len) return null;
+        fields[count] = field;
+        count += 1;
+    }
+    if (count != fields.len or fields[0].len == 0 or fields[1].len == 0) return null;
+    if ((fields[2].len != 1 or (fields[2][0] != '0' and fields[2][0] != '1')) or
+        (fields[3].len != 1 or (fields[3][0] != '0' and fields[3][0] != '1'))) return null;
+    return .{
+        .session = fields[0],
+        .source = fields[1],
+        .owns_copy_mode = fields[2][0] == '1',
+        .refresh_was_active = fields[3][0] == '1',
+    };
 }
 
 fn startReplica(client: tmux.Client, bin: []const u8, query: tmux.PaneSnapshot, session: []const u8) !LaunchResult {
     if (try client.hasSession(session)) {
-        // A markerless session with this deterministic name is an orphan from a
-        // completed restore. Remove it before creating the next replica.
+        if (!(try client.paneDead(session))) return .already_active;
         try client.killSession(session);
     }
 

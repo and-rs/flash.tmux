@@ -146,8 +146,20 @@ pub const Client = struct {
     }
 
     /// Swap the replica into view, then freeze and capture its now-hidden source in one tmux batch.
-    pub fn showAndFreezeCapture(self: Client, replica: []const u8, source: []const u8, session: []const u8, enter_copy_mode: bool) !FrozenFrame {
-        const marker = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ session, source });
+    pub fn showAndFreezeCapture(
+        self: Client,
+        replica: []const u8,
+        source: []const u8,
+        session: []const u8,
+        enter_copy_mode: bool,
+        refresh_was_active: bool,
+    ) !FrozenFrame {
+        const marker = try std.fmt.allocPrint(self.allocator, "{s}|{s}|{d}|{d}", .{
+            session,
+            source,
+            @intFromBool(enter_copy_mode),
+            @intFromBool(refresh_was_active),
+        });
         var commands = CommandBatch.init(self);
         defer commands.deinit();
         try commands.append(&.{ "set-option", "-p", "-t", replica, "remain-on-exit", "on" });
@@ -164,16 +176,25 @@ pub const Client = struct {
     pub fn restoreOverlay(self: Client, pane: []const u8, source: []const u8, cancel_copy_mode: bool, resume_refresh: bool) !void {
         var commands = CommandBatch.init(self);
         defer commands.deinit();
+        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
         if (cancel_copy_mode) try commands.append(&.{ "copy-mode", "-q", "-t", source });
         if (resume_refresh) try appendCopyModeCommand(&commands, source, &.{"refresh-on"});
-        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
         _ = try commands.execute(command_output_limit);
     }
 
-    pub fn recoverOverlay(self: Client, pane: []const u8, source: []const u8, session: []const u8) !void {
+    pub fn recoverOverlay(
+        self: Client,
+        pane: []const u8,
+        source: []const u8,
+        session: []const u8,
+        cancel_copy_mode: bool,
+        resume_refresh: bool,
+    ) !void {
         var commands = CommandBatch.init(self);
         defer commands.deinit();
         try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
+        if (cancel_copy_mode) try commands.append(&.{ "copy-mode", "-q", "-t", source });
+        if (resume_refresh) try appendCopyModeCommand(&commands, source, &.{"refresh-on"});
         try commands.append(&.{ "set-option", "-pu", "-t", pane, overlay_option });
         try commands.append(&.{ "kill-session", "-t", session });
         _ = try commands.execute(command_output_limit);

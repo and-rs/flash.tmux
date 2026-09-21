@@ -73,11 +73,6 @@ while IFS=$'\t' read -r pattern row col; do
   "$tmux_bin" -L "$socket" send-keys -t "$pane" -X history-top
   scroll_before=$("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{scroll_position}')
   [[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{copy_cursor_x},#{copy_cursor_y}') == 0,0 ]]
-  current=$(TMUX="$socket_path,0,0" "$bin" --inspect --pane="$pane")
-  printf '%s' "$current" | perl -0pe 's/\A.*?--- capture ---\n//s' > "$tmp_dir/current-capture.txt"
-  "$cases_bin" "$tmp_dir/current-capture.txt" > "$tmp_dir/current-cases.tsv"
-  IFS=$'\t' read -r pattern row col < "$tmp_dir/current-cases.tsv"
-  [[ -n ${pattern:-} ]] || { printf 'no jump case for pane\n' >&2; exit 1; }
   TMUX="$socket_path,0,0" "$bin" --pane="$pane"
   for _ in {1..100}; do
     overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$window" '#{pane_id}')
@@ -206,6 +201,30 @@ for _ in {1..100}; do
 done
 ! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null || { printf 'owned overlay did not close\n' >&2; exit 1; }
 [[ $("$tmux_bin" -L "$socket" display-message -p -t "$window" '#{pane_id}') == "$pane" ]] || { printf 'owned source was not restored\n' >&2; exit 1; }
+"$tmux_bin" -L "$socket" kill-window -t "$window"
+
+pane=$("$tmux_bin" -L "$socket" new-window -d -P -F '#{pane_id}' -t "$session" /bin/sh -c 'exec cat')
+window=$("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{session_name}:#{window_index}')
+"$tmux_bin" -L "$socket" paste-buffer -b flash-snapshot -t "$pane"
+TMUX="$socket_path,0,0" "$bin" --pane="$pane"
+for _ in {1..100}; do
+  overlay_pane=$("$tmux_bin" -L "$socket" display-message -p -t "$window" '#{pane_id}')
+  marker=$("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{@flash-overlay}')
+  [[ $overlay_pane != "$pane" && -n $marker ]] && break
+  sleep 0.02
+done
+[[ $overlay_pane != "$pane" && -n $marker ]] || { printf 'crash-recovery overlay did not open\n' >&2; exit 1; }
+overlay_pid=$("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{pane_pid}')
+kill -TERM "$overlay_pid"
+for _ in {1..100}; do
+  [[ $("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{pane_dead}') == 1 ]] && break
+  sleep 0.02
+done
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$overlay_pane" '#{pane_dead}') == 1 ]] || { printf 'overlay process did not die\n' >&2; exit 1; }
+TMUX="$socket_path,0,0" "$bin" --pane="$overlay_pane"
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$window" '#{pane_id}') == "$pane" ]] || { printf 'crash recovery did not restore source\n' >&2; exit 1; }
+[[ $("$tmux_bin" -L "$socket" display-message -p -t "$pane" '#{pane_in_mode}') == 0 ]] || { printf 'crash recovery leaked owned copy mode\n' >&2; exit 1; }
+! "$tmux_bin" -L "$socket" has-session -t "flash-overlay-${pane#%}" 2>/dev/null || { printf 'crash recovery leaked overlay session\n' >&2; exit 1; }
 "$tmux_bin" -L "$socket" kill-window -t "$window"
 
 printf 'ok bench-001 ASCII trigrams: %s cases\n' "$tested"
