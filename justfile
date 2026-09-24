@@ -8,15 +8,6 @@ test:
 build:
     zig build -Doptimize=ReleaseFast
 
-visual: build
-    test -n "${TMUX:-}" || (echo "run inside tmux" >&2; exit 1)
-    "{{bin}}" --pane="${TMUX_PANE}"
-
-visual-copy: build
-    test -n "${TMUX:-}" || (echo "run inside tmux" >&2; exit 1)
-    tmux copy-mode
-    "{{bin}}" --pane="${TMUX_PANE}"
-
 snapshot-test: build
     zig build snapshot-cases -Doptimize=ReleaseFast
     ./tests/sh/snapshot-trigrams.sh "{{bin}}"
