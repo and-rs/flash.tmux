@@ -72,26 +72,33 @@ pub const Client = struct {
         return .{ .allocator = allocator, .io = io, .debug = debug };
     }
 
-    pub fn launchPopup(self: Client, bin: []const u8, pane: PaneSnapshot) !void {
+    pub fn launchPopup(self: Client, bin: []const u8, pane: PaneSnapshot, frame_path: []const u8, cursor: flash.Pos, log_path: []const u8) !void {
         var width_buffer: [16]u8 = undefined;
         var height_buffer: [16]u8 = undefined;
         const width_arg = std.fmt.bufPrint(&width_buffer, "{d}", .{pane.width}) catch unreachable;
         const height_arg = std.fmt.bufPrint(&height_buffer, "{d}", .{pane.height}) catch unreachable;
         const pane_arg = try std.fmt.allocPrint(self.allocator, "--pane={s}", .{pane.pane_id});
-        const ui_wrap = "exec \"$0\" \"$@\" 2>>\"${FLASH_TMUX_LOG:-/tmp/flash.tmux.log}\"";
-
+        const frame_arg = try std.fmt.allocPrint(self.allocator, "--frame={s}", .{frame_path});
+        const cursor_arg = try std.fmt.allocPrint(self.allocator, "--cursor={d},{d}", .{ cursor.row, cursor.col });
+        const log_env = try std.fmt.allocPrint(self.allocator, "FLASH_TMUX_LOG={s}", .{log_path});
+        var argv: [24][]const u8 = undefined;
+        var n: usize = 0;
+        const head = [_][]const u8{ "tmux", "display-popup", "-B", "-E", "-e", log_env };
+        @memcpy(argv[0..head.len], &head);
+        n = head.len;
         if (self.debug) {
-            _ = try self.run(&.{
-                "tmux", "display-popup", "-B", "-E", "-e", "FLASH_TMUX_DEBUG=1", "-e", "FLASH_TMUX_LOG=/tmp/flash.tmux.log",
-                "-w",   width_arg,       "-h", height_arg, "-x", "P", "-y", "P",
-                "-t",   pane.pane_id,    "sh", "-c", ui_wrap, bin, "--ui", pane_arg,
-            }, command_output_limit);
-        } else {
-            _ = try self.run(&.{
-                "tmux", "display-popup", "-B", "-E", "-w", width_arg, "-h", height_arg, "-x", "P",
-                "-y",   "P",             "-t", pane.pane_id, "sh", "-c", ui_wrap, bin, "--ui", pane_arg,
-            }, command_output_limit);
+            argv[n] = "-e";
+            n += 1;
+            argv[n] = "FLASH_TMUX_DEBUG=1";
+            n += 1;
         }
+        const tail = [_][]const u8{
+            "-w", width_arg, "-h", height_arg, "-x", "P", "-y", "P", "-t", pane.pane_id,
+            bin,   "--ui",  pane_arg, frame_arg, cursor_arg,
+        };
+        @memcpy(argv[n..][0..tail.len], &tail);
+        n += tail.len;
+        _ = try self.run(argv[0..n], command_output_limit);
     }
 
     pub fn overlayReference(self: Client, pane: []const u8) ![]u8 {

@@ -191,15 +191,15 @@ if [ ! -x "$BIN" ]; then
 fi
 
 bind_popup() {
-    cmd="display-popup -B -E -e FLASH_TMUX_LOG='$LOG'"
+    env="FLASH_TMUX_LOG='$LOG'"
     if [ "$debug" -eq 1 ]; then
-        cmd="$cmd -e FLASH_TMUX_DEBUG=1"
+        env="FLASH_TMUX_DEBUG=1 $env"
     fi
-    cmd="$cmd -w #{pane_width} -h #{pane_height} -x P -y P -t #{pane_id} sh -c 'exec \"\$0\" \"\$@\" 2>>\"\$FLASH_TMUX_LOG\"' '$BIN' --ui --pane=#{pane_id}"
+    cmd="$env '$BIN' --pane=#{pane_id}"
     if [ -n "$1" ]; then
-        tmux bind-key -T "$1" "$2" run-shell -C "$cmd"
+        tmux bind-key -T "$1" "$2" run-shell "$cmd"
     else
-        tmux bind-key "$2" run-shell -C "$cmd"
+        tmux bind-key "$2" run-shell "$cmd"
     fi
 }
 

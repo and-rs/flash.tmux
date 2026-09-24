@@ -11,7 +11,7 @@
 1. why use a replica session?
    - we don't anymore. a pane-sized `display-popup` covers the source without `swap-pane`, which was flashing the live application cursor.
 2. solutions that prevent the cursor from jumping to and from the corner of the terminal?
-   - unanswered yet
+   - no alternate screen and no default-bg clear inside the popup. the launcher captures and dims before `display-popup`. the first write hides the cursor and paints that frame, parked on the source cell. close leaves the cursor hidden, so exit does not park it at 0,0.
 3. characters that are skipped from buffer?
    - yes some character, like box characters, are skipped from the flash buffer. as it is basically unusual/impossible to jump to them and just pollute the selection buffer. there are other chars that might be worth skipping over too in the future.
 

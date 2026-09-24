@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const error_screen = @import("error.zig");
 const flash = @import("flash.zig");
 const sgr = @import("sgr.zig");
@@ -16,25 +17,52 @@ pub fn launch(init: std.process.Init, pane: ?[]const u8) !LaunchResult {
         try client.restore(query.pane_id, ref.owns_copy_mode, ref.refresh_was_active);
         recovered = true;
     }
+    const raw = client.capture(query) catch |err| {
+        if (recovered) return .recovered;
+        return err;
+    };
+    const cursor = try frameCursor(client, query);
+    const dimmed = try sgr.dim(allocator, raw);
+    const frame_path = try writeFrame(init, query.pane_id, dimmed);
+    defer std.Io.Dir.deleteFileAbsolute(init.io, frame_path) catch {};
     const bin = try std.process.executablePathAlloc(init.io, allocator);
-    client.launchPopup(bin, query) catch |err| {
+    const log_path = init.minimal.environ.getPosix("FLASH_TMUX_LOG") orelse "/tmp/flash.tmux.log";
+    client.launchPopup(bin, query, frame_path, cursor, log_path) catch |err| {
         if (recovered) return .recovered;
         return err;
     };
     return .started;
 }
 
-pub fn run(init: std.process.Init, source: []const u8) !void {
+pub fn run(init: std.process.Init, source: []const u8, frame_path: ?[]const u8, cursor: ?flash.Pos) !void {
+    redirectStderr(init);
     var overlay = Overlay{ .init = init, .source = source };
     const client = tmux.Client.init(init.arena.allocator(), init.io, tmux.debugEnabled(init));
-    if (parseRef(try client.overlayReference(source))) |ref| {
-        try client.restore(source, ref.owns_copy_mode, ref.refresh_was_active);
-    }
+    const prepared = if (frame_path) |path| try readFrame(init, path) else null;
 
-    var screen = ui.Session.enter(init.io) catch |err| {
+    var screen = if (prepared) |text| blk: {
+        const parked = cursor orelse return error.MissingCursor;
+        break :blk ui.Session.present(init.io, text, .{ .row = parked.row, .col = parked.col }) catch |err| {
+            overlay.cleanup() catch |cleanup_err| error_screen.reportStderr(init.io, cleanup_err);
+            return err;
+        };
+    } else ui.Session.enter(init.io) catch |err| {
         overlay.cleanup() catch |cleanup_err| error_screen.reportStderr(init.io, cleanup_err);
         return err;
     };
+    if (frame_path) |path| std.Io.Dir.deleteFileAbsolute(init.io, path) catch {};
+
+    if (client.overlayReference(source)) |raw_ref| {
+        if (parseRef(raw_ref)) |ref| client.restore(source, ref.owns_copy_mode, ref.refresh_was_active) catch |err| {
+            screen.close();
+            handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
+            unreachable;
+        };
+    } else |err| {
+        screen.close();
+        handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
+        return;
+    }
 
     const allocator = init.arena.allocator();
     const Prepared = struct {
@@ -42,22 +70,24 @@ pub fn run(init: std.process.Init, source: []const u8) !void {
         frozen: tmux.FrozenFrame,
         lines: []const []const u8,
     };
-    const prepared: Prepared = blk: {
+    const prepared_ui: Prepared = blk: {
         const warm = client.query(source) catch |err| {
             screen.close();
             handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
             unreachable;
         };
-        const warm_raw = client.capture(warm) catch |err| {
-            screen.close();
-            handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
-            unreachable;
-        };
-        screen.showWarmFrame(warm_raw) catch |err| {
-            screen.close();
-            handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
-            unreachable;
-        };
+        if (prepared == null) {
+            const warm_raw = client.capture(warm) catch |err| {
+                screen.close();
+                handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
+                unreachable;
+            };
+            screen.showWarmFrame(warm_raw) catch |err| {
+                screen.close();
+                handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
+                unreachable;
+            };
+        }
         const frozen_frame = overlay.freeze(warm) catch |err| {
             screen.close();
             handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
@@ -92,10 +122,10 @@ pub fn run(init: std.process.Init, source: []const u8) !void {
     screen.close();
     overlay.phase = .tty_closed;
 
-    switch (prepared.outcome) {
+    switch (prepared_ui.outcome) {
         .abort => return cleanupWithErrorScreen(init, &overlay),
         .jump => |match| {
-            overlay.commit(match, prepared.frozen.state, prepared.lines, prepared.frozen.raw) catch |err| {
+            overlay.commit(match, prepared_ui.frozen.state, prepared_ui.lines, prepared_ui.frozen.raw) catch |err| {
                 return handleFailure(init, &overlay, err);
             };
         },
@@ -227,6 +257,51 @@ const Phase = enum { started, frozen, jump_verified, tty_closed, restored };
 
 fn cursorOf(state: tmux.CopyState) flash.Pos {
     return .{ .row = state.cursor.y, .col = state.cursor.x };
+}
+
+fn frameCursor(client: tmux.Client, query: tmux.PaneSnapshot) !flash.Pos {
+    if (!query.in_mode) return .{ .row = query.cursor_y, .col = query.cursor_x };
+    return cursorOf(try client.queryCopy(query.pane_id));
+}
+
+fn writeFrame(init: std.process.Init, pane_id: []const u8, data: []const u8) ![]u8 {
+    const allocator = init.arena.allocator();
+    const tmp = init.minimal.environ.getPosix("TMPDIR") orelse "/tmp";
+    const name = try std.fmt.allocPrint(allocator, "flash.tmux.{d}.{s}.frame", .{ std.Io.Clock.real.now(init.io).nanoseconds, pane_id });
+    var dir = try std.Io.Dir.openDirAbsolute(init.io, tmp, .{});
+    defer dir.close(init.io);
+    try dir.writeFile(init.io, .{ .sub_path = name, .data = data });
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp, name });
+}
+
+fn readFrame(init: std.process.Init, path: []const u8) ![]u8 {
+    const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return error.MissingFrame;
+    const dir_path = if (slash == 0) "/" else path[0..slash];
+    const name = path[slash + 1 ..];
+    if (name.len == 0) return error.MissingFrame;
+    var dir = try std.Io.Dir.openDirAbsolute(init.io, dir_path, .{});
+    defer dir.close(init.io);
+    return dir.readFileAlloc(init.io, name, init.arena.allocator(), .limited(4 * 1024 * 1024));
+}
+
+fn dup2(old: std.posix.fd_t, new: std.posix.fd_t) void {
+    if (builtin.os.tag == .linux and !builtin.link_libc) {
+        _ = std.os.linux.dup2(old, new);
+        return;
+    }
+    _ = std.c.dup2(old, new);
+}
+
+fn redirectStderr(init: std.process.Init) void {
+    const path = init.minimal.environ.getPosix("FLASH_TMUX_LOG") orelse return;
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .APPEND = true,
+    }, 0o644) catch return;
+    dup2(fd, std.posix.STDERR_FILENO);
+    var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+    file.close(init.io);
 }
 
 fn splitLines(allocator: std.mem.Allocator, text: []const u8) ![]const []const u8 {

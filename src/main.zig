@@ -22,7 +22,8 @@ pub fn main(init: std.process.Init) !void {
 
     if (opts.ui) {
         const source = opts.pane orelse return error.MissingPane;
-        overlay.run(init, source) catch |err| {
+        const parked: ?flash_tmux.flash.Pos = if (opts.cursor) |c| .{ .row = c.row, .col = c.col } else null;
+        overlay.run(init, source, opts.frame, parked) catch |err| {
             flash_tmux.error_screen.reportStderr(init.io, err);
             return err;
         };

@@ -12,6 +12,13 @@ test "parse --ui" {
     try std.testing.expectEqualStrings("%1", opts.pane.?);
 }
 
+test "parse prepared frame" {
+    const opts = try flash_tmux.args.parse(&.{ "flash_tmux", "--ui", "--pane=%1", "--frame=/tmp/f", "--cursor=4,9" });
+    try std.testing.expectEqualStrings("/tmp/f", opts.frame.?);
+    try std.testing.expectEqual(@as(u32, 4), opts.cursor.?.row);
+    try std.testing.expectEqual(@as(u32, 9), opts.cursor.?.col);
+}
+
 test "embedded version" {
     try std.testing.expect(flash_tmux.version.len > 0);
 }

@@ -18,8 +18,11 @@ pub const Session = struct {
         self.screen.restore();
     }
 
+    pub fn present(io: std.Io, text: []const u8, cursor: flash.Pos) !Session {
+        return .{ .screen = try tty.Screen.present(io, text, cursor.row, cursor.col) };
+    }
+
     pub fn showWarmFrame(self: *Session, text: []const u8) !void {
-        try self.screen.clear();
         try self.screen.paint(text);
         try self.screen.flushHidden();
     }
