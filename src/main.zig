@@ -20,16 +20,16 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    if (opts.session == null) {
-        _ = overlay.launch(init, opts.pane) catch |err| {
+    if (opts.ui) {
+        const source = opts.pane orelse return error.MissingPane;
+        overlay.run(init, source) catch |err| {
             flash_tmux.error_screen.reportStderr(init.io, err);
             return err;
         };
         return;
     }
 
-    const source = opts.pane orelse return error.MissingPane;
-    overlay.run(init, source, opts.session.?) catch |err| {
+    _ = overlay.launch(init, opts.pane) catch |err| {
         flash_tmux.error_screen.reportStderr(init.io, err);
         return err;
     };

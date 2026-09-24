@@ -9,7 +9,7 @@
 ## Problems that were encountered along the way.
 
 1. why use a replica session?
-   - related to cursor jumping, state while opening the flash buffer & more.
+   - we don't anymore. a pane-sized `display-popup` covers the source without `swap-pane`, which was flashing the live application cursor.
 2. solutions that prevent the cursor from jumping to and from the corner of the terminal?
    - unanswered yet
 3. characters that are skipped from buffer?

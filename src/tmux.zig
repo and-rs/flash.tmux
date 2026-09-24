@@ -2,7 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const flash = @import("flash.zig");
 
-const pane_query_format = "#{pane_id}|#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{?pane_in_mode,1,0}|#{session_name}";
+const pane_query_format = "#{pane_id}|#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{?pane_in_mode,1,0}|#{session_name}|#{pane_left}|#{pane_top}";
 const copy_query_format = "#{pane_id}|#{pane_width}|#{pane_height}|#{?pane_in_mode,1,0}|#{copy_cursor_x}|#{copy_cursor_y}|#{scroll_position}|#{?selection_active,1,0}|#{?selection_present,1,0}|#{selection_start_x}|#{selection_start_y}|#{selection_end_x}|#{selection_end_y}|#{?rectangle_toggle,1,0}|#{refresh_active}|#{copy_position_limit}";
 const overlay_option = "@flash-overlay";
 const command_output_limit = 64;
@@ -35,6 +35,8 @@ pub const PaneSnapshot = struct {
     cursor_y: u32,
     in_mode: bool,
     session_name: []const u8,
+    left: u32 = 0,
+    top: u32 = 0,
 };
 
 pub const CopyPoint = struct { x: u32, y: u32, scroll: u32 };
@@ -70,58 +72,26 @@ pub const Client = struct {
         return .{ .allocator = allocator, .io = io, .debug = debug };
     }
 
-    pub fn killSession(self: Client, session: []const u8) !void {
-        _ = try self.run(&.{ "tmux", "kill-session", "-t", session }, command_output_limit);
-    }
-
-    pub fn launchOverlay(self: Client, bin: []const u8, pane: []const u8, width: u32, height: u32, session: []const u8) !void {
+    pub fn launchPopup(self: Client, bin: []const u8, pane: PaneSnapshot) !void {
         var width_buffer: [16]u8 = undefined;
         var height_buffer: [16]u8 = undefined;
-        const width_arg = std.fmt.bufPrint(&width_buffer, "{d}", .{width}) catch unreachable;
-        const height_arg = std.fmt.bufPrint(&height_buffer, "{d}", .{height}) catch unreachable;
-        const pane_arg = try std.fmt.allocPrint(self.allocator, "--pane={s}", .{pane});
-        const session_arg = try std.fmt.allocPrint(self.allocator, "--session={s}", .{session});
+        const width_arg = std.fmt.bufPrint(&width_buffer, "{d}", .{pane.width}) catch unreachable;
+        const height_arg = std.fmt.bufPrint(&height_buffer, "{d}", .{pane.height}) catch unreachable;
+        const pane_arg = try std.fmt.allocPrint(self.allocator, "--pane={s}", .{pane.pane_id});
+        const ui_wrap = "exec \"$0\" \"$@\" 2>>\"${FLASH_TMUX_LOG:-/tmp/flash.tmux.log}\"";
 
         if (self.debug) {
             _ = try self.run(&.{
-                "tmux",   "new-session",        "-d", "-s",                                 session, "-x",    width_arg,                            "-y",         height_arg,
-                "-e",     "FLASH_TMUX_DEBUG=1", "-e", "FLASH_TMUX_LOG=/tmp/flash.tmux.log", "sh",    "-c",    "exec \"$@\" 2>>\"$FLASH_TMUX_LOG\"", "flash_tmux", bin,
-                pane_arg, session_arg,          ";",  "set-option",                         "-t",    session, "status",                             "off",
+                "tmux", "display-popup", "-B", "-E", "-e", "FLASH_TMUX_DEBUG=1", "-e", "FLASH_TMUX_LOG=/tmp/flash.tmux.log",
+                "-w",   width_arg,       "-h", height_arg, "-x", "P", "-y", "P",
+                "-t",   pane.pane_id,    "sh", "-c", ui_wrap, bin, "--ui", pane_arg,
             }, command_output_limit);
         } else {
             _ = try self.run(&.{
-                "tmux", "new-session", "-d",        "-s", session,      "-x", width_arg, "-y",     height_arg,
-                bin,    pane_arg,      session_arg, ";",  "set-option", "-t", session,   "status", "off",
+                "tmux", "display-popup", "-B", "-E", "-w", width_arg, "-h", height_arg, "-x", "P",
+                "-y",   "P",             "-t", pane.pane_id, "sh", "-c", ui_wrap, bin, "--ui", pane_arg,
             }, command_output_limit);
         }
-        if (self.debug) {
-            const message = try std.fmt.allocPrint(self.allocator, "flash.tmux dev: jump mode ({s})", .{pane});
-            _ = try self.run(&.{ "tmux", "display-message", "-d", "3000", message }, command_output_limit);
-        }
-    }
-
-    pub fn hasSession(self: Client, session: []const u8) !bool {
-        const result = try std.process.run(self.allocator, self.io, .{
-            .argv = &.{ "tmux", "has-session", "-t", session },
-            .stdout_limit = .limited(command_output_limit),
-            .stderr_limit = .limited(4096),
-        });
-        defer self.allocator.free(result.stdout);
-        defer self.allocator.free(result.stderr);
-        return switch (result.term) {
-            .exited => |code| code == 0,
-            else => error.TmuxFailed,
-        };
-    }
-
-    pub fn showOverlay(self: Client, pane: []const u8, session: []const u8, source: []const u8) !void {
-        const value = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ session, source });
-        var commands = CommandBatch.init(self);
-        defer commands.deinit();
-        try commands.append(&.{ "set-option", "-p", "-t", pane, "remain-on-exit", "on" });
-        try commands.append(&.{ "set-option", "-p", "-t", pane, overlay_option, value });
-        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
-        _ = try commands.execute(command_output_limit);
     }
 
     pub fn overlayReference(self: Client, pane: []const u8) ![]u8 {
@@ -132,39 +102,19 @@ pub const Client = struct {
         _ = try self.run(&.{ "tmux", "set-option", "-pu", "-t", pane, overlay_option }, command_output_limit);
     }
 
-    pub fn paneDead(self: Client, pane: []const u8) !bool {
-        const raw = try self.run(&.{ "tmux", "display-message", "-t", pane, "-p", "#{pane_dead}" }, command_output_limit);
-        return std.mem.eql(u8, std.mem.trim(u8, raw, " \t\r\n"), "1");
-    }
-
-    pub fn freeze(self: Client, pane: []const u8, enter_copy_mode: bool) !PaneSnapshot {
-        var commands = CommandBatch.init(self);
-        defer commands.deinit();
-        if (enter_copy_mode) try commands.append(&.{ "copy-mode", "-t", pane });
-        try commands.append(&.{ "display-message", "-t", pane, "-p", pane_query_format });
-        return parseQuery(try commands.execute(query_output_limit));
-    }
-
-    /// Swap the replica into view, then freeze and capture its now-hidden source in one tmux batch.
-    pub fn showAndFreezeCapture(
+    pub fn freezeAndCapture(
         self: Client,
-        replica: []const u8,
         source: []const u8,
-        session: []const u8,
         enter_copy_mode: bool,
         refresh_was_active: bool,
     ) !FrozenFrame {
-        const marker = try std.fmt.allocPrint(self.allocator, "{s}|{s}|{d}|{d}", .{
-            session,
-            source,
+        const marker = try std.fmt.allocPrint(self.allocator, "{d}|{d}", .{
             @intFromBool(enter_copy_mode),
             @intFromBool(refresh_was_active),
         });
         var commands = CommandBatch.init(self);
         defer commands.deinit();
-        try commands.append(&.{ "set-option", "-p", "-t", replica, "remain-on-exit", "on" });
-        try commands.append(&.{ "set-option", "-p", "-t", replica, overlay_option, marker });
-        try commands.append(&.{ "swap-pane", "-Z", "-s", replica, "-t", source });
+        try commands.append(&.{ "set-option", "-p", "-t", source, overlay_option, marker });
         if (enter_copy_mode) try commands.append(&.{ "copy-mode", "-t", source });
         if (refresh_was_active) try appendCopyModeCommand(&commands, source, &.{"refresh-off"});
         try commands.append(&.{ "display-message", "-t", source, "-p", copy_query_format });
@@ -173,30 +123,12 @@ pub const Client = struct {
         return .{ .state = state, .raw = raw };
     }
 
-    pub fn restoreOverlay(self: Client, pane: []const u8, source: []const u8, cancel_copy_mode: bool, resume_refresh: bool) !void {
+    pub fn restore(self: Client, source: []const u8, cancel_copy_mode: bool, resume_refresh: bool) !void {
         var commands = CommandBatch.init(self);
         defer commands.deinit();
-        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
         if (cancel_copy_mode) try commands.append(&.{ "copy-mode", "-q", "-t", source });
         if (resume_refresh) try appendCopyModeCommand(&commands, source, &.{"refresh-on"});
-        _ = try commands.execute(command_output_limit);
-    }
-
-    pub fn recoverOverlay(
-        self: Client,
-        pane: []const u8,
-        source: []const u8,
-        session: []const u8,
-        cancel_copy_mode: bool,
-        resume_refresh: bool,
-    ) !void {
-        var commands = CommandBatch.init(self);
-        defer commands.deinit();
-        try commands.append(&.{ "swap-pane", "-Z", "-s", pane, "-t", source });
-        if (cancel_copy_mode) try commands.append(&.{ "copy-mode", "-q", "-t", source });
-        if (resume_refresh) try appendCopyModeCommand(&commands, source, &.{"refresh-on"});
-        try commands.append(&.{ "set-option", "-pu", "-t", pane, overlay_option });
-        try commands.append(&.{ "kill-session", "-t", session });
+        try commands.append(&.{ "set-option", "-pu", "-t", source, overlay_option });
         _ = try commands.execute(command_output_limit);
     }
 
@@ -312,6 +244,8 @@ pub fn parseQuery(raw: []const u8) !PaneSnapshot {
         .cursor_y = try parseU32(requiredField(&fields, .cursor_y)),
         .in_mode = try parseU32(requiredField(&fields, .in_mode)) != 0,
         .session_name = requiredField(&fields, .session_name),
+        .left = if (field_count > @intFromEnum(QueryField.session_name) + 1) try parseU32(fields[@intFromEnum(QueryField.session_name) + 1]) else 0,
+        .top = if (field_count > @intFromEnum(QueryField.session_name) + 2) try parseU32(fields[@intFromEnum(QueryField.session_name) + 2]) else 0,
     };
 }
 

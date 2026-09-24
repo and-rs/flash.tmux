@@ -18,10 +18,10 @@ pub const Session = struct {
         self.screen.restore();
     }
 
-    pub fn showWarmFrame(self: *Session, text: []const u8, cursor: flash.Pos) !void {
+    pub fn showWarmFrame(self: *Session, text: []const u8) !void {
         try self.screen.clear();
         try self.screen.paint(text);
-        try self.screen.park(cursor.row, cursor.col);
+        try self.screen.flushHidden();
     }
 
     pub fn run(self: *Session, allocator: std.mem.Allocator, text: []const u8, grid: flash.Grid) !Outcome {

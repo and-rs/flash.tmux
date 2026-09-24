@@ -33,11 +33,12 @@ Type a pattern, then a label. Esc aborts. Enter jumps the nearest match. Operati
 just test
 just build
 just visual # inside tmux
+just bench  # HEAD replica vs current popup
 ```
 
 ## Compared to:
 
-This plugin jumps. It does not yank. Type a pattern, press a label, the copy-mode cursor moves there. From prefix, Flash swaps in a warm replica frame then freezes the hidden pane in copy-mode before capturing, so the jump target matches the snapshot; Esc restores the live pane. From copy-mode it keeps (and extends) an active selection. Yank with tmux as usual (`v` then `y`).
+This plugin jumps. It does not yank. Type a pattern, press a label, the copy-mode cursor moves there. A pane-sized popup covers the source; from prefix Flash then freezes that pane in copy-mode so the jump target matches the snapshot; Esc restores the live pane. From copy-mode it keeps (and extends) an active selection. Yank with tmux as usual (`v` then `y`).
 
 > (None are better or worse, just different setups, you make your own conclusions)
 
@@ -45,7 +46,7 @@ Same job, different shape:
 
 | plugin                                                                  | search                     | where                | overlay         | lang   |
 | ----------------------------------------------------------------------- | -------------------------- | -------------------- | --------------- | ------ |
-| this                                                                    | incremental + labels       | prefix and copy-mode | replica session | Zig    |
+| this                                                                    | incremental + labels       | prefix and copy-mode | popup           | Zig    |
 | [AndreVicencio/tmux-flash](https://github.com/AndreVicencio/tmux-flash) | incremental + labels       | copy-mode-vi only    | replica window  | Python |
 | [leo0o7/flash.tmux](https://github.com/leo0o7/flash.tmux)               | incremental + labels       | copy-mode only       | popup           | Python |
 | [j4hangir/tmux-jump](https://github.com/j4hangir/tmux-jump)             | incremental; labels if ≤10 | prefix               | popup           | Go     |

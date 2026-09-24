@@ -21,6 +21,10 @@ snapshot-test: build
     zig build snapshot-cases -Doptimize=ReleaseFast
     ./tests/sh/snapshot-trigrams.sh "{{bin}}"
 
+bench n="20": build
+    zig build snapshot-cases -Doptimize=ReleaseFast
+    ./tests/sh/bench-overlay.sh --n {{n}}
+
 release:
     #!/usr/bin/env sh
     set -eu

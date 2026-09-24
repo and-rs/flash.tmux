@@ -2,8 +2,8 @@ const std = @import("std");
 const Io = std.Io;
 const posix = std.posix;
 
-const enter_seq = "\x1b[?7l";
-const leave_seq = "\x1b[?7h";
+const enter_seq = "\x1b[?1049h\x1b[?7l\x1b[?25l";
+const leave_seq = "\x1b[?1049l";
 const hide_cursor = "\x1b[?25l";
 const show_cursor = "\x1b[?25h";
 
@@ -63,6 +63,10 @@ pub const Screen = struct {
         var seq: [32]u8 = undefined;
         const n = std.fmt.bufPrint(&seq, "\x1b[{d};{d}H{s}", .{ row + 1, col + 1, show_cursor }) catch unreachable;
         try self.writeAll(n);
+        try self.flush();
+    }
+
+    pub fn flushHidden(self: *Screen) !void {
         try self.flush();
     }
 

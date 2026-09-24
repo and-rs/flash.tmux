@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const Args = struct {
     pane: ?[]const u8 = null,
-    session: ?[]const u8 = null,
+    ui: bool = false,
     inspect: bool = false,
     version: bool = false,
 };
@@ -25,14 +25,8 @@ pub fn parse(args: []const []const u8) !Args {
             i += 1;
             if (i >= args.len or args[i].len == 0) return error.MissingPane;
             out.pane = args[i];
-        } else if (std.mem.startsWith(u8, a, "--session=")) {
-            const v = a["--session=".len..];
-            if (v.len == 0) return error.MissingSession;
-            out.session = v;
-        } else if (std.mem.eql(u8, a, "--session")) {
-            i += 1;
-            if (i >= args.len or args[i].len == 0) return error.MissingSession;
-            out.session = args[i];
+        } else if (std.mem.eql(u8, a, "--ui")) {
+            out.ui = true;
         }
     }
     return out;

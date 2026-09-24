@@ -11,33 +11,32 @@ pub fn launch(init: std.process.Init, pane: ?[]const u8) !LaunchResult {
     const allocator = init.arena.allocator();
     const client = tmux.Client.init(allocator, init.io, tmux.debugEnabled(init));
     const query = try client.query(pane);
-
+    var recovered = false;
     if (parseRef(try client.overlayReference(query.pane_id))) |ref| {
-        if (!(try client.hasSession(ref.session))) {
-            try client.clearOverlay(query.pane_id);
-        } else if (!(try client.paneDead(query.pane_id))) {
-            return .already_active;
-        } else {
-            try client.recoverOverlay(query.pane_id, ref.source, ref.session, ref.owns_copy_mode, ref.refresh_was_active);
-            return .recovered;
-        }
+        try client.restore(query.pane_id, ref.owns_copy_mode, ref.refresh_was_active);
+        recovered = true;
     }
-
     const bin = try std.process.executablePathAlloc(init.io, allocator);
-    const suffix = std.mem.trimStart(u8, query.pane_id, "%");
-    const session = try std.fmt.allocPrint(allocator, "flash-overlay-{s}", .{suffix});
-    return startReplica(client, bin, query, session);
+    client.launchPopup(bin, query) catch |err| {
+        if (recovered) return .recovered;
+        return err;
+    };
+    return .started;
 }
 
-pub fn run(init: std.process.Init, source: []const u8, session: []const u8) !void {
-    var overlay = Overlay{ .init = init, .source = source, .session = session };
+pub fn run(init: std.process.Init, source: []const u8) !void {
+    var overlay = Overlay{ .init = init, .source = source };
+    const client = tmux.Client.init(init.arena.allocator(), init.io, tmux.debugEnabled(init));
+    if (parseRef(try client.overlayReference(source))) |ref| {
+        try client.restore(source, ref.owns_copy_mode, ref.refresh_was_active);
+    }
+
     var screen = ui.Session.enter(init.io) catch |err| {
         overlay.cleanup() catch |cleanup_err| error_screen.reportStderr(init.io, cleanup_err);
         return err;
     };
 
     const allocator = init.arena.allocator();
-    const client = tmux.Client.init(allocator, init.io, tmux.debugEnabled(init));
     const Prepared = struct {
         outcome: ui.Outcome,
         frozen: tmux.FrozenFrame,
@@ -54,12 +53,12 @@ pub fn run(init: std.process.Init, source: []const u8, session: []const u8) !voi
             handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
             unreachable;
         };
-        screen.showWarmFrame(warm_raw, .{ .row = warm.cursor_y, .col = warm.cursor_x }) catch |err| {
+        screen.showWarmFrame(warm_raw) catch |err| {
             screen.close();
             handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
             unreachable;
         };
-        const frozen_frame = overlay.showAndFreeze(warm) catch |err| {
+        const frozen_frame = overlay.freeze(warm) catch |err| {
             screen.close();
             handleFailure(init, &overlay, err) catch |handled_err| return handled_err;
             unreachable;
@@ -104,18 +103,10 @@ pub fn run(init: std.process.Init, source: []const u8, session: []const u8) !voi
 }
 
 fn handleFailure(init: std.process.Init, overlay: *Overlay, primary: anyerror) !void {
-    if (overlay.sourceVisible()) |visible| {
-        if (visible) {
-            error_screen.showAndWait(init.io, primary) catch |screen_err| {
-                error_screen.reportStderr(init.io, screen_err);
-            };
-        } else {
-            error_screen.reportStderr(init.io, primary);
-        }
-    } else |probe_err| {
-        error_screen.reportStderr(init.io, probe_err);
+    error_screen.showAndWait(init.io, primary) catch |screen_err| {
+        error_screen.reportStderr(init.io, screen_err);
         error_screen.reportStderr(init.io, primary);
-    }
+    };
 
     cleanupWithErrorScreen(init, overlay) catch |cleanup_err| {
         error_screen.reportStderr(init.io, cleanup_err);
@@ -127,13 +118,6 @@ fn handleFailure(init: std.process.Init, overlay: *Overlay, primary: anyerror) !
 fn cleanupWithErrorScreen(init: std.process.Init, overlay: *Overlay) !void {
     while (true) {
         overlay.cleanup() catch |cleanup_err| {
-            if (overlay.sourceVisible()) |visible| {
-                if (!visible) return cleanup_err;
-            } else |probe_err| {
-                error_screen.reportStderr(init.io, probe_err);
-                return cleanup_err;
-            }
-
             error_screen.showAndWait(init.io, cleanup_err) catch |screen_err| {
                 error_screen.reportStderr(init.io, screen_err);
                 return cleanup_err;
@@ -147,14 +131,11 @@ fn cleanupWithErrorScreen(init: std.process.Init, overlay: *Overlay) !void {
 const Overlay = struct {
     init: std.process.Init,
     source: []const u8,
-    session: []const u8,
-    phase: Phase = .replica,
+    phase: Phase = .started,
     owns_copy_mode: bool = false,
     refresh_was_active: bool = false,
 
-    fn showAndFreeze(self: *Overlay, warm: tmux.PaneSnapshot) !tmux.FrozenFrame {
-        const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return error.MissingOverlayPane;
-        const replica = try self.client().query(pane);
+    fn freeze(self: *Overlay, warm: tmux.PaneSnapshot) !tmux.FrozenFrame {
         const before = try self.client().query(self.source);
         if (!before.in_mode) {
             self.owns_copy_mode = true;
@@ -162,16 +143,9 @@ const Overlay = struct {
             const state = try self.client().queryCopy(self.source);
             self.refresh_was_active = state.refresh_active orelse false;
         }
-        if (before.width != warm.width or before.height != warm.height or
-            replica.width != warm.width or replica.height != warm.height) return error.GeometryChanged;
-        const frozen = try self.client().showAndFreezeCapture(
-            pane,
-            self.source,
-            self.session,
-            self.owns_copy_mode,
-            self.refresh_was_active,
-        );
-        self.phase = .source_frozen;
+        if (before.width != warm.width or before.height != warm.height) return error.GeometryChanged;
+        const frozen = try self.client().freezeAndCapture(self.source, self.owns_copy_mode, self.refresh_was_active);
+        self.phase = .frozen;
         if (frozen.state.width != warm.width or frozen.state.height != warm.height) return error.GeometryChanged;
         return frozen;
     }
@@ -191,75 +165,21 @@ const Overlay = struct {
             .target_col = match.pos.col,
         }, lines);
         self.phase = .jump_verified;
-        try self.restoreAndReap();
+        try self.restore();
     }
 
     fn cleanup(self: *Overlay) !void {
-        switch (self.phase) {
-            .replica => {
-                const state = try self.client().query(self.source);
-                if (std.mem.eql(u8, state.session_name, self.session)) {
-                    self.phase = .source_hidden;
-                    try self.restoreAndReap();
-                } else {
-                    try self.reap();
-                }
-            },
-            .source_hidden, .source_frozen, .jump_verified, .tty_closed, .source_restored => try self.restoreAndReap(),
-            .marker_cleared => try self.reap(),
-            .reaped => {},
-        }
+        if (self.phase != .restored) try self.restore();
     }
 
-    fn sourceVisible(self: *const Overlay) !bool {
-        switch (self.phase) {
-            .source_hidden, .source_frozen, .jump_verified, .tty_closed => {},
-            else => return false,
-        }
-        const state = try self.client().query(self.source);
-        return std.mem.eql(u8, state.session_name, self.session);
-    }
-
-    fn restoreAndReap(self: *Overlay) !void {
-        if (self.phase == .marker_cleared or self.phase == .reaped) return self.reap();
-        const pane = self.init.minimal.environ.getPosix("TMUX_PANE") orelse return error.MissingOverlayPane;
-        var restore_error: ?anyerror = null;
-        if (self.phase != .source_restored) {
-            self.client().restoreOverlay(
-                pane,
-                self.source,
-                self.owns_copy_mode and self.phase != .jump_verified,
-                !self.owns_copy_mode and self.refresh_was_active,
-            ) catch |err| {
-                const state = self.client().query(self.source) catch |probe_err| {
-                    std.debug.print("flash.tmux restore failed: {s}; state probe failed: {s}\n", .{
-                        @errorName(err),
-                        @errorName(probe_err),
-                    });
-                    return err;
-                };
-                if (std.mem.eql(u8, state.session_name, self.session)) return err;
-                restore_error = err;
-            };
-            self.phase = .source_restored;
-        }
-        if (restore_error) |err| {
-            std.debug.print("flash.tmux restore reported failure: {s}; continuing cleanup\n", .{@errorName(err)});
-        }
-        try self.client().clearOverlay(pane);
-        self.phase = .marker_cleared;
-        try self.reap();
-        if (restore_error) |err| return err;
-    }
-
-    fn reap(self: *Overlay) !void {
-        if (self.phase == .reaped) return;
-        if (!(try self.client().hasSession(self.session))) {
-            self.phase = .reaped;
-            return;
-        }
-        try self.client().killSession(self.session);
-        self.phase = .reaped;
+    fn restore(self: *Overlay) !void {
+        if (self.phase == .restored) return;
+        try self.client().restore(
+            self.source,
+            self.owns_copy_mode and self.phase != .jump_verified,
+            !self.owns_copy_mode and self.refresh_was_active,
+        );
+        self.phase = .restored;
     }
 
     fn client(self: *const Overlay) tmux.Client {
@@ -280,15 +200,13 @@ fn writeSnapshot(io: std.Io, raw: []const u8, pane_id: []const u8) void {
 }
 
 const Ref = struct {
-    session: []const u8,
-    source: []const u8,
     owns_copy_mode: bool,
     refresh_was_active: bool,
 };
 
 fn parseRef(raw: []const u8) ?Ref {
     const value = std.mem.trim(u8, raw, " \t\r\n");
-    var fields: [4][]const u8 = undefined;
+    var fields: [2][]const u8 = undefined;
     var count: usize = 0;
     var it = std.mem.splitScalar(u8, value, '|');
     while (it.next()) |field| {
@@ -296,37 +214,16 @@ fn parseRef(raw: []const u8) ?Ref {
         fields[count] = field;
         count += 1;
     }
-    if (count != fields.len or fields[0].len == 0 or fields[1].len == 0) return null;
-    if ((fields[2].len != 1 or (fields[2][0] != '0' and fields[2][0] != '1')) or
-        (fields[3].len != 1 or (fields[3][0] != '0' and fields[3][0] != '1'))) return null;
+    if (count != fields.len) return null;
+    if ((fields[0].len != 1 or (fields[0][0] != '0' and fields[0][0] != '1')) or
+        (fields[1].len != 1 or (fields[1][0] != '0' and fields[1][0] != '1'))) return null;
     return .{
-        .session = fields[0],
-        .source = fields[1],
-        .owns_copy_mode = fields[2][0] == '1',
-        .refresh_was_active = fields[3][0] == '1',
+        .owns_copy_mode = fields[0][0] == '1',
+        .refresh_was_active = fields[1][0] == '1',
     };
 }
 
-fn startReplica(client: tmux.Client, bin: []const u8, query: tmux.PaneSnapshot, session: []const u8) !LaunchResult {
-    if (try client.hasSession(session)) {
-        if (!(try client.paneDead(session))) return .already_active;
-        try client.killSession(session);
-    }
-
-    client.launchOverlay(bin, query.pane_id, query.width, query.height, session) catch |err| {
-        client.killSession(session) catch |cleanup_err| {
-            std.debug.print("flash.tmux launch failed: {s}; cleanup failed: {s}\n", .{
-                @errorName(err),
-                @errorName(cleanup_err),
-            });
-            return cleanup_err;
-        };
-        return err;
-    };
-    return .started;
-}
-
-const Phase = enum { replica, source_hidden, source_frozen, jump_verified, tty_closed, source_restored, marker_cleared, reaped };
+const Phase = enum { started, frozen, jump_verified, tty_closed, restored };
 
 fn cursorOf(state: tmux.CopyState) flash.Pos {
     return .{ .row = state.cursor.y, .col = state.cursor.x };

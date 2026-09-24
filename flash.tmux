@@ -190,16 +190,24 @@ if [ ! -x "$BIN" ]; then
     exit 0
 fi
 
-if [ "$debug" -eq 1 ]; then
-    open="FLASH_TMUX_DEBUG=1 FLASH_TMUX_LOG='$LOG' '$BIN' --pane=#{pane_id} >>'$LOG' 2>&1"
-else
-    open="'$BIN' --pane=#{pane_id}"
-fi
-if ! tmux bind-key "$key" run-shell -b "$open"; then
+bind_popup() {
+    cmd="display-popup -B -E -e FLASH_TMUX_LOG='$LOG'"
+    if [ "$debug" -eq 1 ]; then
+        cmd="$cmd -e FLASH_TMUX_DEBUG=1"
+    fi
+    cmd="$cmd -w #{pane_width} -h #{pane_height} -x P -y P -t #{pane_id} sh -c 'exec \"\$0\" \"\$@\" 2>>\"\$FLASH_TMUX_LOG\"' '$BIN' --ui --pane=#{pane_id}"
+    if [ -n "$1" ]; then
+        tmux bind-key -T "$1" "$2" run-shell -C "$cmd"
+    else
+        tmux bind-key "$2" run-shell -C "$cmd"
+    fi
+}
+
+if ! bind_popup "" "$key"; then
     say "bind prefix-$key failed"
     exit 0
 fi
-if ! tmux bind-key -T copy-mode-vi "$copy_key" run-shell -b "$open"; then
+if ! bind_popup copy-mode-vi "$copy_key"; then
     say "bind copy-mode-vi $copy_key failed"
     exit 0
 fi
